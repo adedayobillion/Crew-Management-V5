@@ -684,9 +684,9 @@ app.post('/api/bookings', requireUser, requireApproved, wrap(async (req, res) =>
     const base = Math.round(Number(p.rate) * days);
     const fee = Math.round(base * 0.1);
     const ins = await db.query(
-      `INSERT INTO bookings (professional_id, user_id, client_name, client_email, start_date, end_date, project_brief, overtime_terms, project_type, booking_unit, project_location, client_total, crew_net, status, crew_response)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'awaiting_review','pending') RETURNING *`,
-      [proId, req.user.id, req.user.name, req.user.email, start, end, str(b.brief, 2000), str(b.overtimeTerms, 1000), projectType, unit, str(b.projectLocation, 200), base + fee, base - fee]);
+      `INSERT INTO bookings (reference, professional_id, user_id, client_name, client_email, start_date, end_date, project_brief, overtime_terms, project_type, booking_unit, project_location, client_total, crew_net, status, crew_response)
+       VALUES ($14,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'awaiting_review','pending') RETURNING *`,
+      [proId, req.user.id, req.user.name, req.user.email, start, end, str(b.brief, 2000), str(b.overtimeTerms, 1000), projectType, unit, str(b.projectLocation, 200), base + fee, base - fee, 'TMP-' + crypto.randomBytes(8).toString('hex')]);
     const row = ins.rows[0];
     const ref = refFor(row.id);
     await db.query('UPDATE bookings SET reference = $1 WHERE id = $2', [ref, row.id]);
