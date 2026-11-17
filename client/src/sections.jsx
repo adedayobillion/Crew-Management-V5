@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import CameraArt from './CameraArt.jsx';
 import { AnimatedNumber, Button, Field, Marquee, Reveal, SkeletonCard, SpotlightCard, Tagline, inputCls } from './ui.jsx';
@@ -223,7 +223,50 @@ export function Banner({ onJoin }) {
 }
 
 /* ---------- Dashboard ---------- */
-export function Dashboard({ onBack, onJoin, openAuth, toast }) {
+/* ---------- Live booking chat ---------- */
+function Chat({ bookingId, title, mine: mineType, onClose }) {
+  const [msgs, setMsgs] = useState([]); const [text, setText] = useState(''); const [err, setErr] = useState(''); const [live, setLive] = useState(false);
+  const end = useRef(null);
+  const add = m => setMsgs(a => (a.some(x => x.id === m.id) ? a : [...a, m]));
+  useEffect(() => {
+    let es;
+    http(`/api/bookings/${bookingId}/messages`).then(r => { if (r.ok) setMsgs(r.data); else setErr(r.data.error || 'Could not load messages.'); });
+    es = new EventSource(`/api/bookings/${bookingId}/messages/stream`);
+    es.onopen = () => setLive(true); es.onerror = () => setLive(false);
+    es.onmessage = e => add(JSON.parse(e.data));
+    return () => es.close();
+  }, [bookingId]);
+  useEffect(() => { end.current?.scrollIntoView({ block: 'end' }); }, [msgs.length]);
+  async function send(e) {
+    e.preventDefault(); const content = text.trim(); if (!content) return;
+    setText('');
+    const r = await postJSON(`/api/bookings/${bookingId}/messages`, { content }).catch(() => ({ ok: false, data: {} }));
+    if (!r.ok) { setErr(r.data.error || 'Could not send.'); setText(content); return; }
+    setErr(''); add(r.data);
+  }
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-3 sm:items-center" onClick={onClose}>
+      <div className="flex h-[min(560px,90vh)] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-line px-4 py-3"><div><strong className="block text-sm">{title}</strong><span className="text-[11px] text-muted">{live ? 'Live' : 'Reconnecting…'}</span></div><Button size="sm" variant="ghost" onClick={onClose}>Close</Button></div>
+        <div className="flex-1 space-y-2 overflow-y-auto bg-[#f7f9f6] p-3">
+          {!msgs.length && <p className="p-4 text-center text-xs text-muted">No messages yet. Phone numbers and emails are masked.</p>}
+          {msgs.map(m => { const mine = m.sender_type === mineType; return (
+            <div key={m.id} className={cn('flex flex-col', mine ? 'items-end' : 'items-start')}>
+              <span className="mb-0.5 text-[10px] text-muted">{mine ? 'You' : m.sender_name}</span>
+              <div className={cn('max-w-[80%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-[13px]', mine ? 'bg-ink text-white' : 'border border-line bg-white')}>{m.masked_content}</div>
+            </div>); })}
+          <div ref={end} />
+        </div>
+        {err && <div className="px-4 pt-2 text-[11px] text-red-600">{err}</div>}
+        <form onSubmit={send} className="flex gap-2 p-3"><input className={cn(inputCls, 'flex-1')} value={text} onChange={e => setText(e.target.value)} maxLength={2000} placeholder="Type a message" aria-label="Message" /><Button type="submit">Send</Button></form>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Client workspace ---------- */
+export function Dashboard({ onBack, onJoin, openAuth, toast, user }) {
+  const [chat, setChat] = useState(null);
   const [rows, setRows] = useState(null); const [error, setError] = useState('');
   async function load() {
     setRows(null); setError('');
@@ -265,18 +308,20 @@ export function Dashboard({ onBack, onJoin, openAuth, toast }) {
               <div><strong>{b.pro}</strong><br /><span className="text-muted">{b.role}</span></div>
               <div>{b.type}<br /><span className="text-muted">{b.date || 'Date to agree'}{b.end && b.end !== b.date ? ' to ' + b.end : ''} · {b.unit === 'half' ? 'Half-day · ' : ''}{b.location}</span></div>
               <div><span className="inline-flex items-center gap-1.5 rounded-full bg-[#fff1d7] px-2.5 py-1 text-[10px] font-extrabold capitalize text-[#8b5c09]"><span className="size-[5px] rounded-full bg-current" />{b.status}</span><br /><span className="text-muted">Ref: {b.id}</span></div>
-              <div><strong>{naira(b.clientTotal)}</strong><br /><span className="text-muted">client total · estimated crew payout {naira(b.crewNet)}</span></div>
+              <div><strong>{naira(b.clientTotal)}</strong><br /><span className="text-muted">client total · estimated crew payout {naira(b.crewNet)}</span><div className="mt-2"><Button size="sm" variant="ghost" onClick={() => setChat({ id: b.dbId, title: b.pro + ' · ' + b.id })}>Messages</Button></div></div>
               {b.status === 'counter pending' && <div className="rounded-xl bg-[#fff8e8] p-3 sm:col-span-full"><strong>Counter-offer from {b.pro}</strong><p className="my-1.5 whitespace-pre-wrap text-muted">{b.counter || 'No details provided.'}</p><div className="flex flex-wrap gap-1.5"><Button size="sm" disabled={busy === b.dbId} onClick={() => answerCounter(b.dbId, 'approved')}>Approve</Button><Button size="sm" variant="ghost" disabled={busy === b.dbId} onClick={() => answerCounter(b.dbId, 'rejected')}>Reject</Button></div></div>}
             </motion.div>
           ))}
       </div>
+      {chat && <Chat bookingId={chat.id} title={chat.title} mine="client" onClose={() => setChat(null)} />}
       <p className="my-2.5 text-[11px] text-muted">Your booking requests are loaded from your account on the server. Payments are not connected yet.</p>
     </motion.section>
   );
 }
 
 /* ---------- Crew workspace ---------- */
-export function CrewDashboard({ onBack, onJoin, toast }) {
+export function CrewDashboard({ onBack, onJoin, toast, user }) {
+  const [chat, setChat] = useState(null);
   const [data, setData] = useState(null); const [error, setError] = useState(''); const [busy, setBusy] = useState(0);
   async function load() {
     setData(null); setError('');
@@ -328,12 +373,14 @@ export function CrewDashboard({ onBack, onJoin, toast }) {
                   <div>{String(b.start_date).slice(0, 10)}{b.end_date !== b.start_date ? ' to ' + String(b.end_date).slice(0, 10) : ''}{b.booking_unit === 'half' ? ' · Half-day' : ''}<br /><span className="text-muted">{b.project_brief ? b.project_brief.slice(0, 90) : 'No brief provided'}</span></div>
                   <div><span className="inline-flex items-center gap-1.5 rounded-full bg-[#fff1d7] px-2.5 py-1 text-[10px] font-extrabold capitalize text-[#8b5c09]"><span className="size-[5px] rounded-full bg-current" />{String(b.status).replaceAll('_', ' ')}</span><br /><span className="text-muted">Ref: {b.reference}</span></div>
                   <div><strong>{naira(b.crew_net)}</strong> <span className="text-muted">your payout</span>
+                    <div className="mt-2"><Button size="sm" variant="ghost" onClick={() => setChat({ id: b.id, title: b.client_name + ' · ' + b.reference })}>Messages</Button></div>
                     {open && <div className="mt-2 flex flex-wrap gap-1.5"><Button size="sm" disabled={busy === b.id} onClick={() => respond(b.id, 'accepted')}>Accept</Button><Button size="sm" variant="ghost" disabled={busy === b.id} onClick={() => respond(b.id, 'countered')}>Counter</Button><Button size="sm" variant="ghost" disabled={busy === b.id} onClick={() => respond(b.id, 'declined')}>Decline</Button></div>}
                   </div>
                 </motion.div>
               );
             })}
           </div>
+          {chat && <Chat bookingId={chat.id} title={chat.title} mine="crew" onClose={() => setChat(null)} />}
           <p className="my-2.5 text-[11px] text-muted">Client contact details stay private until a booking is confirmed through the platform. Payments are not connected yet.</p>
         </>)}
     </motion.section>

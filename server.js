@@ -853,6 +853,19 @@ app.get('/api/bookings/:id/messages', requireUser, wrap(async (req, res) => {
   res.json(rows);
 }));
 
+// Live delivery: one Server-Sent Events stream per open chat, fed by an in-process subscriber map (single replica).
+const chatSubs = new Map();
+app.get('/api/bookings/:id/messages/stream', requireUser, wrap(async (req, res) => {
+  const b = await getAccessibleBooking(pool, req, req.params.id);
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+  res.flushHeaders();
+  res.write('retry: 3000\n\n');
+  if (!chatSubs.has(b.id)) chatSubs.set(b.id, new Set());
+  chatSubs.get(b.id).add(res);
+  const ping = setInterval(() => res.write(': ping\n\n'), 25000);
+  req.on('close', () => { clearInterval(ping); const set = chatSubs.get(b.id); if (set) { set.delete(res); if (!set.size) chatSubs.delete(b.id); } });
+}));
+
 app.post('/api/bookings/:id/messages', requireUser, wrap(async (req, res) => {
   const b = await getAccessibleBooking(pool, req, req.params.id);
   const content = str(req.body.content, 2000);
@@ -860,6 +873,7 @@ app.post('/api/bookings/:id/messages', requireUser, wrap(async (req, res) => {
   const { rows } = await pool.query(
     `INSERT INTO messages (booking_id, sender_type, sender_name, masked_content) VALUES ($1,$2,$3,$4) RETURNING *`,
     [b.id, ownsBooking(req.user, b) ? 'client' : 'crew', req.user.name, maskContact(content)]);
+  for (const sub of chatSubs.get(b.id) || []) sub.write(`data: ${JSON.stringify(rows[0])}\n\n`);
   res.status(201).json(rows[0]);
 }));
 
