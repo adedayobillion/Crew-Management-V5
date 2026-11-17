@@ -120,7 +120,6 @@ function ProCard({ p, i, saved, onSave, onBook }) {
           <span aria-hidden className="absolute -right-5 -top-[60px] size-[170px] rounded-full border border-white/15 shadow-[0_0_0_25px_#ffffff09]" />
           <span aria-hidden className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent transition-transform duration-1000 ease-out group-hover/spot:translate-x-full" />
           <motion.span className="relative" whileHover={{ scale: 1.25, rotate: -6 }}>{p.symbol}</motion.span>
-          <span className="absolute left-3 top-3 rounded-full bg-white/90 px-2.5 py-1.5 text-[10px] font-extrabold text-[#294321]">Profile sample</span>
           <motion.button aria-label={(saved ? 'Remove ' : 'Save ') + p.name} aria-pressed={saved} whileHover={{ scale: 1.12 }} whileTap={{ scale: 0.8 }} onClick={() => onSave(p.id)}
             className="absolute right-3 top-3 grid size-[31px] place-items-center rounded-full bg-white/90 text-[17px] text-ink">
             <motion.span key={String(saved)} initial={{ scale: 0.4 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 500, damping: 12 }} className={saved ? 'text-[#e5484d]' : ''}>{saved ? '♥' : '♡'}</motion.span>
@@ -147,7 +146,7 @@ export function Discover({ pros, loading, filters, setFilters, saved, onSave, on
   const chips = [['', 'All professionals'], ...CATEGORIES.map(c => [c, c])];
   return (
     <section id="discover" className="mx-auto w-[min(1200px,calc(100%-28px))] py-10 sm:py-14">
-      <SectionHead tag="Discover talent" title="Book professionals for your next production.">Browse this sample roster. Profile details and rates are demo content and should be replaced with real, verified crew profiles before launch.</SectionHead>
+      <SectionHead tag="Discover talent" title="Book professionals for your next production.">Browse available crew, compare rates and send a booking request.</SectionHead>
       <div className="no-scrollbar -mx-0.5 mb-4 flex gap-2 overflow-x-auto px-0.5 pb-2 sm:flex-wrap">
         {chips.map(([v, l]) => (
           <motion.button key={v} whileTap={{ scale: 0.94 }} whileHover={{ y: -2 }} onClick={() => setFilters(f => ({ ...f, category: v }))} aria-pressed={filters.category === v}
@@ -157,7 +156,7 @@ export function Discover({ pros, loading, filters, setFilters, saved, onSave, on
           </motion.button>
         ))}
       </div>
-      <div className="mb-4 flex items-center justify-between text-xs text-muted"><span>{loading ? 'Loading professionals…' : `${list.length} professional${list.length === 1 ? '' : 's'}`}</span><span>★ Ratings shown are illustrative demo data</span></div>
+      <div className="mb-4 flex items-center justify-between text-xs text-muted"><span>{loading ? 'Loading professionals…' : `${list.length} professional${list.length === 1 ? '' : 's'}`}</span></div>
       {loading ? (
         <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3 lg:gap-[18px]">{Array.from({ length: 6 }, (_, i) => <SkeletonCard key={i} />)}</div>
       ) : (
@@ -165,7 +164,7 @@ export function Discover({ pros, loading, filters, setFilters, saved, onSave, on
           <AnimatePresence mode="popLayout">{list.map((p, i) => <ProCard key={p.id} p={p} i={i} saved={saved.has(p.id)} onSave={onSave} onBook={onBook} />)}</AnimatePresence>
         </motion.div>
       )}
-      {!loading && !list.length && <div className="rounded-2xl border border-dashed border-[#cbd3d7] bg-white p-8 text-center text-muted">No demo professionals match those filters. Try a different role or category.</div>}
+      {!loading && !list.length && <div className="rounded-2xl border border-dashed border-[#cbd3d7] bg-white p-8 text-center text-muted">No professionals match those filters. Try a different role or category.</div>}
     </section>
   );
 }
@@ -241,7 +240,7 @@ export function Dashboard({ onBack, onJoin, openAuth, toast }) {
         <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={onBack}>← Browse crew</Button><Button onClick={onJoin}>Register as crew</Button></div>
       </div>
       <div className="mb-5 grid grid-cols-2 gap-3.5 sm:grid-cols-3">
-        {[['Total booking requests', <AnimatedNumber value={rows?.length || 0} />], ['Awaiting confirmation', <AnimatedNumber value={pending} />], ['Demo payment status', 'Not connected']].map(([l, v], i) => (
+        {[['Total booking requests', <AnimatedNumber value={rows?.length || 0} />], ['Awaiting confirmation', <AnimatedNumber value={pending} />], ['Payment status', 'Not connected']].map(([l, v], i) => (
           <motion.div key={l} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }} whileHover={{ y: -3 }} className={cn('rounded-2xl border border-line bg-white p-3.5 sm:p-5', i === 2 && 'col-span-2 sm:col-span-1')}>
             <small className="text-[11px] text-muted">{l}</small><strong className="mt-2 block font-display text-[23px] font-extrabold tracking-[-.05em] sm:text-[27px]">{v}</strong>
           </motion.div>

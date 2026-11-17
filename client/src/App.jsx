@@ -5,15 +5,6 @@ import { Banner, COVERS, CrewDashboard, Dashboard, Discover, Footer, Hero, How, 
 import { ScrollProgress, ToastProvider, useToast } from './ui.jsx';
 import { http, postJSON } from './lib.js';
 
-const SAMPLE = [
-  { id: 1, name: 'Tobi Adebayo', role: 'Cinematographer', category: 'Camera', location: 'Lagos', rate: 180000, credits: '8 years experience', desc: 'Commercials, music videos and branded visual stories.', skills: ['Cinema camera', 'Lighting', 'Commercials'] },
-  { id: 2, name: 'Amaka Okorie', role: 'Production Manager', category: 'Production', location: 'Lagos', rate: 120000, credits: '6 years experience', desc: 'Schedules, crew coordination and efficient on-set operations.', skills: ['Scheduling', 'Crew calls', 'Budgets'] },
-  { id: 3, name: 'Daniel Eze', role: 'Video Editor', category: 'Editing', location: 'Remote', rate: 85000, credits: '5 years experience', desc: 'Fast-paced edits for campaigns, social and long-form content.', skills: ['Premiere Pro', 'DaVinci', 'Colour'] },
-  { id: 4, name: 'Mariam Bello', role: 'Gaffer / Lighting Tech', category: 'Lighting', location: 'Lagos', rate: 95000, credits: '7 years experience', desc: 'Lighting setups for interviews, commercials and narrative shoots.', skills: ['LED systems', 'Grip', 'Set safety'] },
-  { id: 5, name: 'Chuka Nwosu', role: 'Production Sound Mixer', category: 'Sound', location: 'Abuja', rate: 100000, credits: '6 years experience', desc: 'Location sound recording, dialogue and audio equipment management.', skills: ['Boom op', 'Wireless', 'Location sound'] },
-  { id: 6, name: 'Zainab Yusuf', role: 'Makeup & Creative Artist', category: 'Creative', location: 'Lagos', rate: 70000, credits: '4 years experience', desc: 'Camera-ready makeup and creative looks for talent and campaigns.', skills: ['Beauty', 'Editorial', 'Set-ready'] }
-].map((p, i) => ({ ...p, cover: COVERS[i % 6], symbol: SYMBOLS[i % 6] }));
-
 function Shell() {
   const toast = useToast();
   const [user, setUser] = useState(null);
@@ -30,7 +21,7 @@ function Shell() {
     http('/api/professionals').then(({ ok, data }) => {
       if (!ok) throw 0;
       setPros((data.professionals || []).map((p, i) => ({ id: Number(p.id), name: p.name, role: p.role, category: p.category, location: p.location, rate: Number(p.rate), credits: p.credits, desc: p.desc, skills: Array.isArray(p.skills) ? p.skills : [], cover: COVERS[i % 6], symbol: SYMBOLS[i % 6] })));
-    }).catch(() => setPros(SAMPLE)).finally(() => setLoading(false));
+    }).catch(() => setPros([])).finally(() => setLoading(false));
     http('/api/auth/me').then(({ data }) => setUser(data.user || null)).catch(() => setUser(null));
   }, []);
 
@@ -73,7 +64,7 @@ function Shell() {
     if (next) setTimeout(next, 250);
     else if (u.accountType === 'crew' && mode === 'register') setTimeout(() => toast('You are in crew mode. Choose “Join as crew” to submit your profile. You can switch back to hiring any time.'), 900);
   }
-  const toggleSave = id => setSaved(s => { const n = new Set(s); const had = n.has(id); had ? n.delete(id) : n.add(id); toast(had ? 'Removed from shortlist.' : 'Saved to shortlist (demo).'); return n; });
+  const toggleSave = id => setSaved(s => { const n = new Set(s); const had = n.has(id); had ? n.delete(id) : n.add(id); toast(had ? 'Removed from shortlist.' : 'Saved to shortlist.'); return n; });
 
   return (
     <>
