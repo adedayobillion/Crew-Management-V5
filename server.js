@@ -434,6 +434,15 @@ async function initDb() {
       await client.query(`UPDATE crew_applications SET status = 'pending' WHERE status = 'pending_review'`);
     } catch (err) { console.warn('Legacy column cleanup note (non-fatal):', err.message); }
 
+    // One-time schema report in the logs, to debug databases created by older versions.
+    try {
+      const { rows: cols } = await client.query(`SELECT table_name, string_agg(column_name || ':' || data_type || CASE WHEN is_nullable = 'NO' THEN '!' ELSE '' END, ', ' ORDER BY ordinal_position) AS cols
+        FROM information_schema.columns WHERE table_schema = 'public' GROUP BY table_name ORDER BY table_name`);
+      for (const r of cols) console.log(`Schema ${r.table_name}: ${r.cols}`);
+      const { rows: cons } = await client.query(`SELECT conrelid::regclass AS t, conname, pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE connamespace = 'public'::regnamespace AND contype IN ('c', 'f', 'u')`);
+      for (const r of cons) console.log(`Constraint ${r.t} ${r.conname}: ${r.def}`);
+    } catch (err) { console.warn('Schema report failed:', err.message); }
+
     await client.query(`DELETE FROM sessions WHERE expires_at < NOW()`);
 
     // Seed demo professionals if table is empty
@@ -1020,6 +1029,7 @@ app.use((err, req, res, next) => {
   if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON body.' });
   if (err.type === 'entity.too.large') return res.status(413).json({ error: 'Request is too large.' });
   if (err.code === '23505') return res.status(409).json({ error: 'That record already exists.' });
+  if (['23502', '23503', '22P02', '22007', '23514'].includes(err.code)) console.warn('DB validation error:', err.code, err.message, '| table:', err.table, 'column:', err.column, 'constraint:', err.constraint, '|', req.method, req.path);
   if (err.code === '23503' || err.code === '22P02' || err.code === '22007' || err.code === '23514') return res.status(400).json({ error: 'Some of the submitted details are invalid.' });
   console.error('Server error:', err); // details stay in the logs, never in the response
   res.status(500).json({ error: 'Something went wrong. Please try again.' });
