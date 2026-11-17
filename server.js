@@ -730,7 +730,7 @@ app.post('/api/crew/bookings/:id/respond', requireUser, wrap(async (req, res) =>
     const b = (await db.query('SELECT * FROM bookings WHERE id = $1 FOR UPDATE', [id])).rows[0];
     if (!b) fail(404, 'Booking not found.');
     if ((await crewProfessionalId(db, req.user.id)) !== b.professional_id) fail(403, 'This booking is not assigned to you.');
-    if (!['awaiting_review', 'pending', 'counter_pending'].includes(b.status)) fail(409, 'This booking can no longer be responded to.');
+    if (!['awaiting_review', 'pending'].includes(b.status)) fail(409, 'This booking can no longer be responded to.');
     let newStatus = response === 'accepted' ? 'confirmed' : response === 'declined' ? 'declined' : 'counter_pending';
     if (response === 'accepted') {
       await db.query('SELECT id FROM professionals WHERE id = $1 FOR UPDATE', [b.professional_id]);
@@ -742,6 +742,28 @@ app.post('/api/crew/bookings/:id/respond', requireUser, wrap(async (req, res) =>
     return { status: newStatus, crew_response: response };
   });
   res.json({ success: true, ...result });
+}));
+
+/* ---------------- hirer response to a crew counter-offer ---------------- */
+app.post('/api/bookings/:id/counter-response', requireUser, wrap(async (req, res) => {
+  const id = toInt(req.params.id); if (!id) fail(400, 'Invalid booking id.');
+  const response = req.body.response;
+  if (!['approved', 'rejected'].includes(response)) fail(400, 'Invalid response action.');
+  const booking = await withTx(async db => {
+    const b = (await db.query('SELECT * FROM bookings WHERE id = $1 FOR UPDATE', [id])).rows[0];
+    if (!b) fail(404, 'Booking not found.');
+    if (!ownsBooking(req.user, b)) fail(403, 'You do not have access to this booking.');
+    if (b.status !== 'counter_pending') fail(409, 'This booking has no counter-offer awaiting your response.');
+    if (response === 'approved') {
+      await db.query('SELECT id FROM professionals WHERE id = $1 FOR UPDATE', [b.professional_id]);
+      const clash = await db.query(`SELECT 1 FROM availability_blocks WHERE professional_id = $1 AND NOT (end_date < $2 OR start_date > $3) LIMIT 1`, [b.professional_id, b.start_date, b.end_date]);
+      if (clash.rows.length) fail(409, 'The professional is no longer available on these dates.');
+      await db.query(`INSERT INTO availability_blocks (professional_id, start_date, end_date, reason) VALUES ($1,$2,$3,'confirmed booking')`, [b.professional_id, b.start_date, b.end_date]);
+    }
+    const upd = await db.query('UPDATE bookings SET status = $1 WHERE id = $2 RETURNING *', [response === 'approved' ? 'confirmed' : 'declined', id]);
+    return upd.rows[0];
+  });
+  res.json({ success: true, booking });
 }));
 
 /* ---------------- payments & invoices ---------------- */
