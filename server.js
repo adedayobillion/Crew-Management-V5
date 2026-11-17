@@ -422,6 +422,20 @@ async function initDb() {
       SKILLS_IS_JSON = !!sk[0] && sk[0].data_type === 'jsonb';
     } catch (err) { console.warn('Column type fix note (non-fatal):', err.message); }
 
+    // Some legacy tables have an `id` column with no default and no identity, so every INSERT gets id = NULL.
+    try {
+      const { rows: noId } = await client.query(`SELECT table_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND column_name = 'id' AND column_default IS NULL AND is_identity = 'NO'
+        AND table_name = ANY($1)`, [['professionals', 'bookings', 'users', 'sessions', 'crew_applications', 'admin_audit_log', 'availability_blocks',
+          'team_bookings', 'team_booking_members', 'payments', 'invoices', 'disputes', 'payouts', 'reviews', 'messages']]);
+      for (const { table_name: t } of noId) {
+        await client.query(`CREATE SEQUENCE IF NOT EXISTS "${t}_id_seq" OWNED BY "${t}".id`);
+        await client.query(`SELECT setval('"${t}_id_seq"', COALESCE((SELECT MAX(id) FROM "${t}"), 0) + 1, false)`);
+        await client.query(`ALTER TABLE "${t}" ALTER COLUMN id SET DEFAULT nextval('"${t}_id_seq"')`);
+        console.log(`Added id default to ${t}`);
+      }
+    } catch (err) { console.warn('id default fix note (non-fatal):', err.message); }
+
     // Older databases may carry extra NOT NULL columns the app never fills (e.g. crew_applications.full_name),
     // which makes every INSERT fail. Relax them, and align legacy values with what the app queries.
     try {
