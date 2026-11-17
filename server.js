@@ -469,6 +469,24 @@ async function initDb() {
       for (const r of cons) console.log(`Constraint ${r.t} ${r.conname}: ${r.def}`);
     } catch (err) { console.warn('Schema report failed:', err.message); }
 
+    // One-time cleanup: the six fictional professionals the old startup seed inserted. Matched by exact name and no
+    // application_id, so real profiles (which always have an application_id) are never touched. Rows that bookings
+    // still reference are deactivated instead of deleted.
+    try {
+      const demo = ['Tobi Adebayo', 'Amaka Okorie', 'Daniel Eze', 'Mariam Bello', 'Chuka Nwosu', 'Zainab Yusuf'];
+      const { rows: found } = await client.query(`SELECT id, name FROM professionals WHERE name = ANY($1) AND application_id IS NULL`, [demo]);
+      for (const { id, name } of found) {
+        try {
+          await client.query('DELETE FROM professionals WHERE id = $1', [id]);
+          console.log(`Removed demo professional ${id} (${name})`);
+        } catch (err) {
+          if (err.code !== '23503') throw err;
+          await client.query(`UPDATE professionals SET status = 'inactive', is_active = FALSE WHERE id = $1`, [id]);
+          console.log(`Deactivated demo professional ${id} (${name}); it has bookings`);
+        }
+      }
+    } catch (err) { console.warn('Demo cleanup note (non-fatal):', err.message); }
+
     await client.query(`DELETE FROM sessions WHERE expires_at < NOW()`);
   } finally {
     client.release();
