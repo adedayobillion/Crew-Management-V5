@@ -229,9 +229,18 @@ export function Dashboard({ onBack, onJoin, openAuth, toast }) {
     setRows(null); setError('');
     const { ok, data } = await http('/api/my/bookings').catch(() => ({ ok: false, data: { error: 'Could not connect to backend.' } }));
     if (!ok) { setError(data.error || 'Could not load bookings.'); return; }
-    setRows((data.bookings || []).map(b => ({ id: b.reference, pro: b.professional_name, role: b.professional_role, type: b.project_type, clientTotal: Number(b.client_total), crewNet: Number(b.crew_net), unit: b.booking_unit, date: String(b.start_date).slice(0, 10), end: String(b.end_date).slice(0, 10), location: b.project_location, status: String(b.status).replaceAll('_', ' ') })));
+    setRows((data.bookings || []).map(b => ({ id: b.reference, dbId: b.id, counter: b.counter_details, pro: b.professional_name, role: b.professional_role, type: b.project_type, clientTotal: Number(b.client_total), crewNet: Number(b.crew_net), unit: b.booking_unit, date: String(b.start_date).slice(0, 10), end: String(b.end_date).slice(0, 10), location: b.project_location, status: String(b.status).replaceAll('_', ' ') })));
   }
   useEffect(() => { load(); }, []);
+  const [busy, setBusy] = useState(0);
+  async function answerCounter(dbId, response) {
+    setBusy(dbId);
+    const r = await postJSON(`/api/bookings/${dbId}/counter-response`, { response }).catch(() => ({ ok: false, data: {} }));
+    setBusy(0);
+    if (!r.ok) { toast(r.data.error || 'Could not send your response.'); return; }
+    toast(response === 'approved' ? 'Counter-offer approved. Booking confirmed.' : 'Counter-offer rejected.');
+    load();
+  }
   const pending = (rows || []).filter(b => ['awaiting review', 'awaiting terms', 'confirmed'].includes(b.status)).length;
   return (
     <motion.section initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mx-auto w-[min(1200px,calc(100%-28px))] pb-16 pt-6">
@@ -257,6 +266,7 @@ export function Dashboard({ onBack, onJoin, openAuth, toast }) {
               <div>{b.type}<br /><span className="text-muted">{b.date || 'Date to agree'}{b.end && b.end !== b.date ? ' to ' + b.end : ''} · {b.unit === 'half' ? 'Half-day · ' : ''}{b.location}</span></div>
               <div><span className="inline-flex items-center gap-1.5 rounded-full bg-[#fff1d7] px-2.5 py-1 text-[10px] font-extrabold capitalize text-[#8b5c09]"><span className="size-[5px] rounded-full bg-current" />{b.status}</span><br /><span className="text-muted">Ref: {b.id}</span></div>
               <div><strong>{naira(b.clientTotal)}</strong><br /><span className="text-muted">client total · estimated crew payout {naira(b.crewNet)}</span></div>
+              {b.status === 'counter pending' && <div className="rounded-xl bg-[#fff8e8] p-3 sm:col-span-full"><strong>Counter-offer from {b.pro}</strong><p className="my-1.5 whitespace-pre-wrap text-muted">{b.counter || 'No details provided.'}</p><div className="flex flex-wrap gap-1.5"><Button size="sm" disabled={busy === b.dbId} onClick={() => answerCounter(b.dbId, 'approved')}>Approve</Button><Button size="sm" variant="ghost" disabled={busy === b.dbId} onClick={() => answerCounter(b.dbId, 'rejected')}>Reject</Button></div></div>}
             </motion.div>
           ))}
       </div>
@@ -311,7 +321,7 @@ export function CrewDashboard({ onBack, onJoin, toast }) {
           <div className="overflow-hidden rounded-2xl border border-line bg-white">
             <div className="border-b border-line px-5 py-[18px] font-extrabold">Requests for your profile</div>
             {!rows.length ? <div className="p-7 text-[13px] text-muted">No requests yet. Clients can now find and book your profile.</div> : rows.map((b, i) => {
-              const open = ['awaiting_review', 'pending', 'counter_pending'].includes(b.status);
+              const open = ['awaiting_review', 'pending'].includes(b.status);
               return (
                 <motion.div key={b.id} initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }} className="grid gap-2 border-b border-[#edf0f1] p-[15px] text-xs last:border-0 sm:grid-cols-[1.1fr_1.2fr_.8fr_1fr] sm:items-center sm:gap-3 sm:px-5 sm:py-4">
                   <div><strong>{b.client_name}</strong><br /><span className="text-muted">{b.project_type}{b.project_location ? ' · ' + b.project_location : ''}</span></div>
