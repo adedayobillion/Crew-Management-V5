@@ -79,7 +79,7 @@ function Shell() {
               <How /><Trust /><Banner onJoin={openJoin} />
             </div>
           ) : page === 'crew' ? <CrewDashboard key="c" onBack={() => showPage('marketplace')} onJoin={openJoin} toast={toast} />
-          : <Dashboard key="d" onBack={() => showPage('marketplace')} onJoin={openJoin} />}
+          : <Dashboard key="d" onBack={() => showPage('marketplace')} onJoin={openJoin} toast={toast} />}
         </AnimatePresence>
       </main>
       <Footer openLegal={setLegal} />
