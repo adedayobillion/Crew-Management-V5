@@ -67,7 +67,9 @@ async function initDb() {
     // Run statements one at a time; failures are retried after the whole pass (e.g. an index that
     // needs a column added by a later repair), and never abort startup or roll back other statements.
     const failed = [];
+    const allSql = [];
     const runSql = async sql => {
+      allSql.push(sql);
       for (const st of sql.split(';').map(x => x.trim()).filter(Boolean)) {
         try { await client.query(st); } catch (err) { failed.push([st, err]); }
       }
@@ -400,6 +402,30 @@ async function initDb() {
       try { await client.query(st); }
       catch (err) { console.warn('Migration note (non-fatal):', err.message, '::', st.replace(/\s+/g, ' ').slice(0, 80)); }
     }
+
+    // Older databases may carry extra NOT NULL columns the app never fills (e.g. crew_applications.full_name),
+    // which makes every INSERT fail. Relax them, and align legacy values with what the app queries.
+    try {
+      const known = {};
+      const text = allSql.join('\n');
+      for (const [, t, c] of text.matchAll(/ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS "?(\w+)"?/g)) (known[t] ||= new Set(['id'])).add(c);
+      for (const [, t, body] of text.matchAll(/CREATE TABLE IF NOT EXISTS (\w+) \(([\s\S]*?)\n      \);/g)) {
+        const set = (known[t] ||= new Set(['id']));
+        for (const line of body.split('\n')) { const c = line.trim().match(/^"?(\w+)"?\s/); if (c && !/^(PRIMARY|UNIQUE|CONSTRAINT|FOREIGN|CHECK)$/i.test(c[1])) set.add(c[1]); }
+      }
+      const { rows: legacy } = await client.query(
+        `SELECT table_name, column_name FROM information_schema.columns
+         WHERE table_schema = 'public' AND is_nullable = 'NO' AND column_default IS NULL AND is_identity = 'NO' AND table_name = ANY($1)`, [Object.keys(known)]);
+      for (const { table_name: t, column_name: c } of legacy) {
+        if (known[t].has(c)) continue;
+        await client.query(`ALTER TABLE "${t}" ALTER COLUMN "${c}" DROP NOT NULL`);
+        console.log(`Relaxed legacy NOT NULL on ${t}.${c}`);
+      }
+      const { rows: fn } = await client.query(`SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='crew_applications' AND column_name='full_name'`);
+      if (fn.length) await client.query(`UPDATE crew_applications SET name = full_name WHERE name IS NULL`);
+      await client.query(`ALTER TABLE crew_applications ALTER COLUMN status SET DEFAULT 'pending'`);
+      await client.query(`UPDATE crew_applications SET status = 'pending' WHERE status = 'pending_review'`);
+    } catch (err) { console.warn('Legacy column cleanup note (non-fatal):', err.message); }
 
     await client.query(`DELETE FROM sessions WHERE expires_at < NOW()`);
 
