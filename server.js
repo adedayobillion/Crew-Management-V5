@@ -61,6 +61,7 @@ async function withTx(fn) {
 }
 
 /* ---------------- database ---------------- */
+let SKILLS_IS_JSON = false; // legacy databases store professionals.skills as jsonb instead of text[]
 async function initDb() {
   const client = await pool.connect();
   try {
@@ -409,6 +410,17 @@ async function initDb() {
       try { await client.query(st); }
       catch (err) { console.warn('Migration note (non-fatal):', err.message, '::', st.replace(/\s+/g, ' ').slice(0, 80)); }
     }
+
+    // Older databases store professionals.application_id as a number; the app uses text ids like 'app-6' / 'demo-1'.
+    try {
+      const { rows: ty } = await client.query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='professionals' AND column_name='application_id'`);
+      if (ty[0] && !['character varying', 'text'].includes(ty[0].data_type)) {
+        await client.query(`ALTER TABLE professionals ALTER COLUMN application_id TYPE VARCHAR(255) USING application_id::text`);
+        console.log('Converted professionals.application_id to VARCHAR(255)');
+      }
+      const { rows: sk } = await client.query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='professionals' AND column_name='skills'`);
+      SKILLS_IS_JSON = !!sk[0] && sk[0].data_type === 'jsonb';
+    } catch (err) { console.warn('Column type fix note (non-fatal):', err.message); }
 
     // Older databases may carry extra NOT NULL columns the app never fills (e.g. crew_applications.full_name),
     // which makes every INSERT fail. Relax them, and align legacy values with what the app queries.
@@ -982,9 +994,9 @@ app.post('/api/admin/applications/:id/create-profile', adminGuard, wrap(async (r
     if (a.status === 'rejected') fail(409, 'This application was rejected. Approve it first.');
     const verified = a.user_id ? !!((await db.query('SELECT is_verified FROM users WHERE id = $1', [a.user_id])).rows[0] || {}).is_verified : false;
     const p = (await db.query(
-      `INSERT INTO professionals (application_id, name, role, category, location, bio, "desc", rate, rate_full_day, rate_half_day, skills, verified, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8,$9,$10,$11,'approved') RETURNING *`,
-      ['app-' + id, a.name, a.role, category, a.location, a.bio, (a.bio || '').slice(0, 200), dailyRate, Math.round(dailyRate / 2), [], verified])).rows[0];
+      `INSERT INTO professionals (application_id, name, role, category, location, bio, "desc", rate, rate_full_day, rate_half_day, skills, verified, status, credits)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8,$9,$10,$11,'approved','') RETURNING *`,
+      ['app-' + id, a.name, a.role, category, a.location || '', a.bio, (a.bio || '').slice(0, 200), dailyRate, Math.round(dailyRate / 2), SKILLS_IS_JSON ? '[]' : [], verified])).rows[0];
     await db.query(`UPDATE crew_applications SET professional_id = $1, status = 'approved' WHERE id = $2`, [p.id, id]);
     await audit(db, req, 'create_profile', { id: a.user_id, name: a.name, email: a.email }, { reference: '#' + id, status: 'profile ' + p.id });
     return p;
