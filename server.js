@@ -411,7 +411,7 @@ async function initDb() {
       catch (err) { console.warn('Migration note (non-fatal):', err.message, '::', st.replace(/\s+/g, ' ').slice(0, 80)); }
     }
 
-    // Older databases store professionals.application_id as a number; the app uses text ids like 'app-6' / 'demo-1'.
+    // Older databases store professionals.application_id as a number; the app uses text ids like 'app-6'.
     try {
       const { rows: ty } = await client.query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='professionals' AND column_name='application_id'`);
       if (ty[0] && !['character varying', 'text'].includes(ty[0].data_type)) {
@@ -470,23 +470,6 @@ async function initDb() {
     } catch (err) { console.warn('Schema report failed:', err.message); }
 
     await client.query(`DELETE FROM sessions WHERE expires_at < NOW()`);
-
-    // Seed demo professionals if table is empty
-    const { rows } = await client.query('SELECT COUNT(*) FROM professionals');
-    if (parseInt(rows[0].count) === 0) {
-      await client.query(`
-        INSERT INTO professionals (application_id, name, role, category, location, rate, rating, credits, "desc", skills, verified, status)
-        VALUES 
-        ('demo-1', 'Tobi Adebayo', 'Cinematographer', 'Camera', 'Lagos', 180000, 4.9, '8 years experience', 'Commercials, music videos and branded visual stories.', ARRAY['Cinema camera', 'Lighting', 'Commercials'], TRUE, 'approved'),
-        ('demo-2', 'Amaka Okorie', 'Production Manager', 'Production', 'Lagos', 120000, 4.9, '6 years experience', 'Schedules, crew coordination and efficient on-set operations.', ARRAY['Scheduling', 'Crew calls', 'Budgets'], TRUE, 'approved'),
-        ('demo-3', 'Daniel Eze', 'Video Editor', 'Editing', 'Remote', 85000, 4.8, '5 years experience', 'Fast-paced edits for campaigns, social and long-form content.', ARRAY['Premiere Pro', 'DaVinci', 'Colour'], TRUE, 'approved'),
-        ('demo-4', 'Mariam Bello', 'Gaffer / Lighting Tech', 'Lighting', 'Lagos', 95000, 4.8, '7 years experience', 'Lighting setups for interviews, commercials and narrative shoots.', ARRAY['LED systems', 'Grip', 'Set safety'], TRUE, 'approved'),
-        ('demo-5', 'Chuka Nwosu', 'Production Sound Mixer', 'Sound', 'Abuja', 100000, 4.7, '6 years experience', 'Location sound recording, dialogue and audio equipment management.', ARRAY['Boom op', 'Wireless', 'Location sound'], TRUE, 'approved'),
-        ('demo-6', 'Zainab Yusuf', 'Makeup & Creative Artist', 'Creative', 'Lagos', 70000, 4.9, '4 years experience', 'Camera-ready makeup and creative looks for talent and campaigns.', ARRAY['Beauty', 'Editorial', 'Set-ready'], TRUE, 'approved')
-        ON CONFLICT (application_id) DO NOTHING;
-      `);
-      console.log('Seeded professionals successfully.');
-    }
   } finally {
     client.release();
   }
