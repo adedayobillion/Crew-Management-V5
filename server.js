@@ -64,7 +64,15 @@ async function withTx(fn) {
 async function initDb() {
   const client = await pool.connect();
   try {
-    await client.query(`
+    // Run statements one at a time; failures are retried after the whole pass (e.g. an index that
+    // needs a column added by a later repair), and never abort startup or roll back other statements.
+    const failed = [];
+    const runSql = async sql => {
+      for (const st of sql.split(';').map(x => x.trim()).filter(Boolean)) {
+        try { await client.query(st); } catch (err) { failed.push([st, err]); }
+      }
+    };
+    await runSql(`
       CREATE TABLE IF NOT EXISTS professionals (
         id SERIAL PRIMARY KEY,
         application_id VARCHAR(255) UNIQUE,
@@ -207,7 +215,7 @@ async function initDb() {
       );
     `);
 
-    await client.query(`
+    await runSql(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
@@ -251,7 +259,7 @@ async function initDb() {
     `);
 
     // Additive migrations (safe to run on every start, and on databases created by older versions)
-    await client.query(`
+    const migrations = `
       ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT FALSE;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS is_suspicious BOOLEAN NOT NULL DEFAULT FALSE;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS is_suspended BOOLEAN NOT NULL DEFAULT FALSE;
@@ -270,7 +278,60 @@ async function initDb() {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_reference ON bookings(reference);
       CREATE INDEX IF NOT EXISTS idx_bookings_user ON bookings(user_id);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_one_per_booking ON reviews(booking_id);
-    `).catch(err => console.warn('Migration note (non-fatal):', err.message));
+    `;
+    // Repair databases created by older versions: CREATE TABLE IF NOT EXISTS never adds missing columns.
+    const repairs = `
+      ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS user_id INT REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS name TEXT;
+      ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS email TEXT;
+      ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS role TEXT;
+      ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS location TEXT;
+      ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS portfolio TEXT;
+      ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS bio TEXT;
+      ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS status VARCHAR(30) NOT NULL DEFAULT 'pending';
+      ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS account_type VARCHAR(20) NOT NULL DEFAULT 'client';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS account_status VARCHAR(30) NOT NULL DEFAULT 'approved';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS application_id VARCHAR(255);
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS job_title TEXT;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS category TEXT;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS location TEXT;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS bio TEXT;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS photo TEXT;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS showreel TEXT;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS skills TEXT[];
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS kit TEXT[];
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS languages TEXT[];
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS rate NUMERIC;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS rate_half_day NUMERIC;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS rate_full_day NUMERIC;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS rate_overtime NUMERIC;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS rate_travel NUMERIC;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS rating NUMERIC DEFAULT 4.9;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS credits TEXT;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS "desc" TEXT;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT FALSE;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'approved';
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS client_email TEXT;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'pending';
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS crew_response VARCHAR(50) DEFAULT 'pending';
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS counter_details TEXT;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS agreed BOOLEAN DEFAULT FALSE;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS terms_version VARCHAR(50);
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) DEFAULT 'unpaid';
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS project_brief TEXT;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS overtime_terms TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_professionals_application_id ON professionals(application_id);
+    `;
+    await runSql(repairs);
+    await runSql(migrations);
+    for (const [st, firstErr] of failed) {
+      try { await client.query(st); }
+      catch (err) { console.warn('Migration note (non-fatal):', err.message, '::', st.replace(/\s+/g, ' ').slice(0, 80)); }
+    }
 
     await client.query(`DELETE FROM sessions WHERE expires_at < NOW()`);
 
