@@ -1,0 +1,31 @@
+{
+  "name": "crew-management-agency-marketplace",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Responsive crew marketplace with PostgreSQL-backed account registration, login and sessions",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build": "npx vite build --config client/vite.config.mjs",
+    "dev": "node --watch server.js",
+    "dev:client": "vite --config client/vite.config.mjs",
+    "check": "node --check server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@vitejs/plugin-react": "^6.3.0",
+    "bcryptjs": "^2.4.3",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "motion": "^14.14.0",
+    "pg": "^8.13.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.5",
+    "vite": "^8.3.8"
+  }
+}

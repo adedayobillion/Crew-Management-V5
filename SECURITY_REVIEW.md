@@ -1,0 +1,55 @@
+# Security and link review — test release
+
+Review date: 2026-10-19
+
+## Checks performed
+
+- Node.js backend syntax check: passed (`node --check server.js`).
+- Inline browser JavaScript syntax check: passed (`node --check` on extracted inline script).
+- Internal anchor audit: no broken hash links found; no duplicate HTML IDs found.
+- Legacy footer text `Demo marketplace · Sample profiles and pricing · Payments not connected`: removed.
+- Registration requires Terms/Privacy acknowledgement; backend records the acceptance timestamp and draft policy version.
+- User-controlled profile and booking strings are HTML-escaped before insertion into the page.
+- Helmet security headers/CSP, same-origin write-request checks, request-size limits, general/auth/admin rate limits, safe cookie parsing, and constant-time admin token comparison are configured.
+
+## Important limits
+
+- This was a source-level review and syntax/link audit, not a full penetration test or an independent security certification.
+- Live external URL checks could not be completed from the build environment because external DNS/network access was unavailable. Google Fonts therefore remain an external dependency; the system font stack provides a fallback.
+- CSP still permits inline scripts because the current page uses inline scripts and event-handler attributes. For a stronger policy, move JavaScript to external files, remove inline event handlers, and remove `unsafe-inline` from `script-src`.
+- Rate limiting currently uses the process-local default store; use a shared store if deploying multiple replicas.
+- There is no email verification, password reset, MFA, full admin dashboard, account deletion/export workflow, or admin audit log.
+- Payment processing, Bachs.io webhook verification, refunds, dispute operations, and real crew payouts are not implemented. Keep `PAYMENTS_ENABLED=false`.
+- The policy text is a starter template and includes placeholders that must be completed and reviewed by qualified counsel before launch.
+- The sample crew profiles and ratings are illustrative and must not be presented as real or verified professionals.
+
+## Suggested smoke tests after Railway deploy
+
+1. `GET /api/health` reports database connected.
+2. Registration without checking the policy checkbox is rejected.
+3. Registration with consent succeeds and records the account.
+4. Duplicate email registration is rejected.
+5. Login with the wrong password returns a generic error.
+6. Client account can create and retrieve only its own bookings.
+7. Crew account cannot create client bookings.
+8. A write request from a different browser origin is rejected.
+9. Admin routes reject missing/incorrect tokens and accept the correct secret only from a secure operator workflow.
+10. Test policy modal links, mobile layout, date selection, half-day/full-day price calculation, and keyboard Escape/close behavior.
+
+## Admin dashboard addition (2026-10-19)
+
+Added `/admin.html` with server-protected endpoints for account review and moderation. Features include pending/approved/rejected states, manual verification flags, suspicious-activity flags, suspension/reactivation, internal notes, account search/filters, overview counts, audit events, and existing booking/application tables. All account actions require `CMA_ADMIN_TOKEN` in the `x-admin-token` request header and use the admin rate limiter. Suspensions and rejections revoke active sessions. New registrations default to `pending_review`; booking and crew application submission require approval. Existing accounts migrate as approved to avoid unexpected lockouts.
+
+Limitations remain: this uses one shared admin token, not named admin identities or MFA; manual “verified” is only a flag and does not itself verify identity; suspicious flags require human review; no automated fraud scoring is implemented. Protect and rotate the token, and use named admin accounts/MFA and a stronger audit policy before operating at scale. Static syntax checks passed; no live Railway/database end-to-end or penetration test was run in this environment.
+
+## Review fixes (2026-10-19)
+
+- CSP: added `scriptSrcAttr 'unsafe-inline'` (Helmet's default `script-src-attr 'none'` was blocking every inline `onclick`). Still a stopgap: move to external scripts to drop `unsafe-inline`.
+- Admin token is held in memory only (no `sessionStorage`); admin limiter counts failed attempts only (20/15 min).
+- Auth: failed-login limiter per IP and per email; separate sign-up limiter; dummy bcrypt compare removes the login timing difference; logout works for suspended users.
+- Frontend loads profiles from `/api/professionals` (built-in samples are only a fallback); ratings removed; seed no longer overwrites database edits.
+- Bookings: past start dates rejected, 10 requests per user per 24h, enforced status transitions, refund requires a collected payment, confirmation requires agreed overtime terms; DATE columns returned as plain strings.
+- Crew: duplicate pending applications rejected; admin can approve/reject applications and create a linked profile; crew see bookings via `GET /api/my/crew-bookings` (no crew UI yet).
+- Audit log now records booking status/overtime and application actions (actor is still the shared token).
+- Added `.env.example`, `.gitignore`, `package-lock.json`; removed duplicate root HTML files.
+- Tested against local PostgreSQL 16 and headless Chromium. Not done: email verification, password reset, MFA, named admin accounts, payments, external-script CSP.
