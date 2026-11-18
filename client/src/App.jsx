@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AnimatePresence } from 'motion/react';
+import { AnimatePresence, motion } from 'motion/react';
 import { AuthModal, BookingModal, JoinModal, LegalModal } from './modals.jsx';
+import { MessageInbox, ProfilePage } from './Account.jsx';
 import { Banner, COVERS, CrewDashboard, Dashboard, Discover, Footer, Hero, How, Nav, SYMBOLS, Trust } from './sections.jsx';
 import { ScrollProgress, ToastProvider, useToast } from './ui.jsx';
 import { http, postJSON } from './lib.js';
@@ -16,6 +17,40 @@ function Shell() {
   const [bookingPro, setBookingPro] = useState(null);
   const [joinOpen, setJoinOpen] = useState(false);
   const [legal, setLegal] = useState(null);
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const [inboxInitialId, setInboxInitialId] = useState(null);
+  const [unreadMessages, setUnreadMessages] = useState(0);
+  const [incomingMessage, setIncomingMessage] = useState(null);
+  const [messagePopupsEnabled, setMessagePopupsEnabled] = useState(true);
+
+  const refreshUnread = useCallback(async () => {
+    if (!user) { setUnreadMessages(0); return; }
+    const r = await http('/api/inbox').catch(() => ({ ok: false, data: {} }));
+    if (r.ok) setUnreadMessages((r.data.conversations || []).reduce((sum, c) => sum + Number(c.unread_count || 0), 0));
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user) {
+      setUnreadMessages(0);
+      setIncomingMessage(null);
+      setMessagePopupsEnabled(true);
+      return;
+    }
+    let active = true;
+    http('/api/profile').then(r => {
+      if (active && r.ok) setMessagePopupsEnabled(r.data.settings?.message_popups !== false);
+    }).catch(() => {});
+    refreshUnread();
+    const stream = new EventSource('/api/messages/stream');
+    stream.onmessage = event => {
+      let message;
+      try { message = JSON.parse(event.data); } catch { return; }
+      if (!active) return;
+      if (messagePopupsEnabled) setIncomingMessage(message);
+      refreshUnread();
+    };
+    return () => { active = false; stream.close(); };
+  }, [user?.id, messagePopupsEnabled, refreshUnread]);
 
   useEffect(() => {
     http('/api/professionals').then(({ ok, data }) => {
@@ -27,6 +62,16 @@ function Shell() {
 
   const closeAuth = useCallback(() => setAuth(a => ({ ...a, open: false })), []);
   const openAuth = (mode = 'login', next = null, role = null) => setAuth({ open: true, mode, role, next });
+  const openInbox = bookingId => {
+    if (!user) { openAuth('login', () => openInbox(bookingId)); return; }
+    setInboxInitialId(bookingId || null);
+    setInboxOpen(true);
+    setIncomingMessage(null);
+  };
+  const openProfile = () => {
+    if (!user) { openAuth('login', () => showPage('profile')); return; }
+    showPage('profile');
+  };
   const showPage = p => { setPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }); };
   // Switch between hiring and crew mode (one login, like Airbnb's guest/host toggle)
   async function ensureMode(mode, quiet = false) {
@@ -69,7 +114,7 @@ function Shell() {
   return (
     <>
       <ScrollProgress />
-      <Nav user={user} onLogin={() => openAuth('login')} onLogout={logout} onDashboard={openDashboard} onCrewDashboard={openCrewDashboard} onSwitch={switchMode} onHome={() => showPage('marketplace')} onJoin={openJoin} />
+      <Nav user={user} onLogin={() => openAuth('login')} onLogout={logout} onDashboard={openDashboard} onCrewDashboard={openCrewDashboard} onSwitch={switchMode} onHome={() => showPage('marketplace')} onJoin={openJoin} onProfile={openProfile} onMessages={() => openInbox()} unreadCount={unreadMessages} />
       <main>
         <AnimatePresence mode="wait">
           {page === 'marketplace' ? (
@@ -78,8 +123,9 @@ function Shell() {
               <Discover pros={pros} loading={loading} filters={filters} setFilters={setFilters} saved={saved} onSave={toggleSave} onBook={openBooking} />
               <How /><Trust /><Banner onJoin={openJoin} />
             </div>
-          ) : page === 'crew' ? <CrewDashboard key="c" onBack={() => showPage('marketplace')} onJoin={openJoin} toast={toast} />
-          : <Dashboard key="d" onBack={() => showPage('marketplace')} onJoin={openJoin} toast={toast} />}
+          ) : page === 'profile' ? <ProfilePage key="profile" user={user} onBack={() => showPage('marketplace')} onUserUpdated={setUser} />
+          : page === 'crew' ? <CrewDashboard key="c" onBack={() => showPage('marketplace')} onJoin={openJoin} toast={toast} user={user} onMessages={openInbox} />
+          : <Dashboard key="d" onBack={() => showPage('marketplace')} onJoin={openJoin} toast={toast} user={user} onMessages={openInbox} />}
         </AnimatePresence>
       </main>
       <Footer openLegal={setLegal} />
@@ -89,6 +135,23 @@ function Shell() {
       <JoinModal open={joinOpen} user={user} onClose={() => setJoinOpen(false)} onNeedAuth={() => { setJoinOpen(false); openAuth('login', () => setJoinOpen(true), 'crew'); }}
         onDone={a => { setJoinOpen(false); toast('Crew application received for review. Application #' + a.id + '.'); }} />
       <LegalModal topic={legal} setTopic={setLegal} onClose={() => setLegal(null)} />
+      <MessageInbox open={inboxOpen} onClose={() => setInboxOpen(false)} onRead={refreshUnread} user={user} initialBookingId={inboxInitialId} />
+      <AnimatePresence>
+        {incomingMessage && !inboxOpen && (
+          <motion.div initial={{ opacity: 0, y: 18, scale: .96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10 }}
+            className="fixed bottom-5 right-4 z-[85] w-[min(380px,calc(100%-32px))] rounded-2xl border border-line bg-white p-4 shadow-2xl sm:right-6">
+            <div className="flex items-start justify-between gap-3">
+              <button type="button" onClick={() => openInbox(incomingMessage.booking_id)} className="min-w-0 flex-1 text-left">
+                <span className="flex items-center gap-2 text-xs font-extrabold text-[#5f7f22]"><span className="grid size-8 place-items-center rounded-full bg-lime-soft">✉</span>New message</span>
+                <strong className="mt-2 block truncate text-sm">{incomingMessage.sender_name || 'New message'}</strong>
+                <span className="mt-1 block line-clamp-2 text-xs text-muted">{incomingMessage.preview || 'You have a new booking message.'}</span>
+                <span className="mt-2 block text-[11px] font-bold text-[#5f7f22]">Open conversation · {incomingMessage.reference || ''}</span>
+              </button>
+              <button type="button" aria-label="Dismiss notification" onClick={() => setIncomingMessage(null)} className="rounded-lg px-2 py-1 text-muted hover:bg-[#f1f3f5]">×</button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   );
 }
