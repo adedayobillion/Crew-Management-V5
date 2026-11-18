@@ -53,3 +53,14 @@ Limitations remain: this uses one shared admin token, not named admin identities
 - Audit log now records booking status/overtime and application actions (actor is still the shared token).
 - Added `.env.example`, `.gitignore`, `package-lock.json`; removed duplicate root HTML files.
 - Tested against local PostgreSQL 16 and headless Chromium. Not done: email verification, password reset, MFA, named admin accounts, payments, external-script CSP.
+
+## Review fixes (2026-11-18)
+
+- Repo hygiene: `node_modules/` removed from Git; real `.gitignore` and `.env.example` added.
+- Dependencies: `npm audit fix` (body-parser DoS); 0 known vulnerabilities.
+- Ownership of bookings, crew profiles and chats is now by `user_id` only. The previous e-mail-address fallback let someone who registered with another person's unverified address inherit their data. Legacy rows are linked once at startup (`app_migrations`).
+- CSP: `unsafe-inline` removed from `script-src`; `script-src-attr 'none'`. Styles still allow inline.
+- Admin: optional per-admin tokens via `CMA_ADMIN_TOKENS="name:token,..."`; the audit log records the named actor. Still no MFA or admin sessions.
+- Database TLS: set `DATABASE_SSL_CA` to verify the server certificate; internal Railway hosts skip TLS.
+- Payments: `/api/payments/initialize` returns 503 unless `PAYMENTS_ENABLED=true`. Invoice supplier TIN comes from `SUPPLIER_TIN` (no hardcoded placeholder).
+- Still open: e-mail verification, MFA / named admin accounts, shared rate-limit and SSE stores for multiple replicas, a real migration tool.

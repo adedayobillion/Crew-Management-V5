@@ -11,16 +11,33 @@ const bcrypt = require('bcryptjs');
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const DATABASE_URL = process.env.DATABASE_URL;
-const ADMIN_TOKEN = process.env.CMA_ADMIN_TOKEN || '';
+// Admin credentials. CMA_ADMIN_TOKEN is a single token (actor "admin"). CMA_ADMIN_TOKENS lets each admin have
+// their own token as "name:token,name2:token2" so the audit log records who did what.
+const ADMIN_TOKENS = [];
+if (process.env.CMA_ADMIN_TOKEN) ADMIN_TOKENS.push({ name: 'admin', token: process.env.CMA_ADMIN_TOKEN });
+for (const part of String(process.env.CMA_ADMIN_TOKENS || '').split(',')) {
+  const i = part.indexOf(':'); const name = part.slice(0, i).trim(); const token = part.slice(i + 1).trim();
+  if (i > 0 && name && token.length >= 24) ADMIN_TOKENS.push({ name: name.slice(0, 60), token });
+}
+const SUPPLIER_TIN = process.env.SUPPLIER_TIN || '';
+const PAYMENTS_ENABLED = process.env.PAYMENTS_ENABLED === 'true';
 const WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET || '';
 const REQUIRE_APPROVAL = process.env.REQUIRE_ACCOUNT_APPROVAL === 'true'; // true => new accounts start as pending_review
 if (!DATABASE_URL) {
   console.error('DATABASE_URL is missing. Add a Railway PostgreSQL service and attach its DATABASE_URL variable.');
   process.exit(1);
 }
+// TLS to Postgres: off for local/private Railway hosts. Otherwise set DATABASE_SSL_CA (PEM) to fully verify the
+// server certificate, or DATABASE_SSL_REJECT_UNAUTHORIZED=true if the server uses a publicly trusted certificate.
+// Without either, the connection is encrypted but the certificate is not verified (previous behaviour).
+function dbSsl() {
+  if (/localhost|127\.0\.0\.1|\.railway\.internal/.test(DATABASE_URL)) return false;
+  if (process.env.DATABASE_SSL_CA) return { ca: process.env.DATABASE_SSL_CA.replace(/\\n/g, '\n'), rejectUnauthorized: true };
+  return { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED === 'true' };
+}
 const pool = new Pool({
   connectionString: DATABASE_URL,
-  ssl: /localhost|127\.0\.0\.1/.test(DATABASE_URL) ? false : { rejectUnauthorized: false },
+  ssl: dbSsl(),
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000
@@ -30,7 +47,7 @@ pool.on('error', err => console.error('Idle database client error:', err.message
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 
-app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], baseUri: ["'self'"], fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'], styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'], scriptSrc: ["'self'", "'unsafe-inline'"], scriptSrcAttr: ["'unsafe-inline'"], imgSrc: ["'self'", 'data:', 'https:'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], formAction: ["'self'"] } } }));
+app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], baseUri: ["'self'"], fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'], styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'], scriptSrc: ["'self'"], scriptSrcAttr: ["'none'"], imgSrc: ["'self'", 'data:', 'https:'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], formAction: ["'self'"] } } }));
 // rawBody is kept so payment-webhook signatures can be verified against the exact bytes received
 app.use(express.json({ limit: '8mb', type: 'application/json', verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use((req, res, next) => {
@@ -173,7 +190,7 @@ async function initDb() {
         vat_rate NUMERIC DEFAULT 7.5,
         vat_amount NUMERIC NOT NULL,
         total_amount NUMERIC NOT NULL,
-        supplier_tin TEXT DEFAULT 'TIN-NGN-2026-987654',
+        supplier_tin TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -401,7 +418,8 @@ async function initDb() {
       ALTER TABLE invoices ADD COLUMN IF NOT EXISTS vat_rate NUMERIC DEFAULT 7.5;
       ALTER TABLE invoices ADD COLUMN IF NOT EXISTS vat_amount NUMERIC;
       ALTER TABLE invoices ADD COLUMN IF NOT EXISTS total_amount NUMERIC;
-      ALTER TABLE invoices ADD COLUMN IF NOT EXISTS supplier_tin TEXT DEFAULT 'TIN-NGN-2026-987654';
+      ALTER TABLE invoices ADD COLUMN IF NOT EXISTS supplier_tin TEXT;
+      ALTER TABLE invoices ALTER COLUMN supplier_tin DROP DEFAULT;
       ALTER TABLE invoices ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS booking_id INT REFERENCES bookings(id);
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS raised_by VARCHAR(50);
@@ -566,6 +584,22 @@ async function initDb() {
       }
     } catch (err) { console.warn('Demo cleanup note (non-fatal):', err.message); }
 
+    // One-time backfill. Ownership used to fall back to matching e-mail addresses on rows without a user_id, which
+    // let anyone who registered with someone else's (unverified) address inherit their bookings and crew profile.
+    // Ownership is now by user_id only, so link legacy rows once, here, and never again.
+    try {
+      await client.query(`CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
+      const done = await client.query(`SELECT 1 FROM app_migrations WHERE name = 'link-legacy-rows-by-email'`);
+      if (!done.rowCount) {
+        await client.query('BEGIN');
+        const a = await client.query(`UPDATE crew_applications ca SET user_id = u.id FROM users u WHERE ca.user_id IS NULL AND LOWER(u.email) = LOWER(ca.email)`);
+        const b = await client.query(`UPDATE bookings b SET user_id = u.id FROM users u WHERE b.user_id IS NULL AND LOWER(u.email) = LOWER(b.client_email)`);
+        await client.query(`INSERT INTO app_migrations (name) VALUES ('link-legacy-rows-by-email')`);
+        await client.query('COMMIT');
+        console.log(`Linked legacy rows to accounts: ${a.rowCount} crew applications, ${b.rowCount} bookings`);
+      }
+    } catch (err) { await client.query('ROLLBACK').catch(() => {}); console.warn('Legacy link note (non-fatal):', err.message); }
+
     await client.query(`DELETE FROM sessions WHERE expires_at < NOW()`);
   } finally {
     client.release();
@@ -642,7 +676,7 @@ async function syncIdentityVerification(db,userId,verified) {
   await db.query(
     "UPDATE professionals p SET verified=$1 FROM crew_applications ca JOIN users u ON u.id=$2 " +
     "WHERE (ca.professional_id=p.id OR p.application_id='app-' || ca.id::text) " +
-    "AND (ca.user_id=$2 OR (ca.user_id IS NULL AND LOWER(COALESCE(ca.email,''))=LOWER(u.email)))",
+    "AND ca.user_id=$2",
     [verified,userId]);
 }
 const safeIdFilename = name => String(name || 'identity-document').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'identity-document';
@@ -667,7 +701,7 @@ app.patch('/api/profile', requireUser, wrap(async (req, res) => {
       [name, phone || null, location || null, bio || null, req.user.id]);
     // Keep the public crew listing in sync with the account owner’s editable profile.
     const applications = await db.query(
-      'UPDATE crew_applications SET name=$1, full_name=$1, email=$2, location=$3, bio=$4 WHERE user_id=$5 OR (user_id IS NULL AND LOWER(email)=LOWER($2)) RETURNING id, professional_id',
+      'UPDATE crew_applications SET name=$1, full_name=$1, email=$2, location=$3, bio=$4 WHERE user_id=$5 RETURNING id, professional_id',
       [name, updated.rows[0].email, location || '', bio || '', req.user.id]);
     for (const application of applications.rows) {
       await db.query(
@@ -789,41 +823,42 @@ app.get('/api/crew/bookings', requireUser, wrap(async (req, res) => {
 /* ---------------- admin guard ---------------- */
 const adminFailLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: 'draft-7', legacyHeaders: false, skipSuccessfulRequests: true, requestWasSuccessful: (req, res) => res.statusCode !== 401, message: { error: 'Too many failed attempts. Try again later.' } });
 function requireAdmin(req, res, next) {
-  if (!ADMIN_TOKEN) return res.status(503).json({ error: 'Admin console is disabled. Set CMA_ADMIN_TOKEN in Railway Variables.' });
+  if (!ADMIN_TOKENS.length) return res.status(503).json({ error: 'Admin console is disabled. Set CMA_ADMIN_TOKEN (or CMA_ADMIN_TOKENS) in Railway Variables.' });
   const a = crypto.createHash('sha256').update(String(req.get('x-admin-token') || '')).digest();
-  const b = crypto.createHash('sha256').update(ADMIN_TOKEN).digest();
-  if (!crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'Unauthorized' });
+  let who = null;
+  for (const t of ADMIN_TOKENS) { // check every entry so timing does not reveal which one matched
+    const b = crypto.createHash('sha256').update(t.token).digest();
+    if (crypto.timingSafeEqual(a, b) && !who) who = t.name;
+  }
+  if (!who) return res.status(401).json({ error: 'Unauthorized' });
+  req.adminName = who;
   next();
 }
 const adminGuard = [adminFailLimiter, requireAdmin];
 async function audit(db, req, action, target, details) {
   await db.query(
     `INSERT INTO admin_audit_log (action, actor, target_user_id, target_name, target_email, details, ip_address) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-    [action, 'admin', target ? target.id : null, target ? target.name : null, target ? target.email : null, JSON.stringify(details || {}), req.ip]);
+    [action, req.adminName || 'admin', target ? target.id : null, target ? target.name : null, target ? target.email : null, JSON.stringify(details || {}), req.ip]);
 }
 
 /* ---------------- access helpers ---------------- */
 // Resolve every crew profile linked to this account. The application_id fallback
 // also recognises profiles created by earlier versions if the direct link is absent.
 async function crewProfessionalIds(db, user) {
-  const email = String(user.email || '').trim().toLowerCase();
   const { rows } = await db.query(
     `SELECT DISTINCT p.id
        FROM professionals p
        JOIN crew_applications ca
          ON (ca.professional_id = p.id OR p.application_id = 'app-' || ca.id::text)
-      WHERE ca.user_id = $1
-         OR (ca.user_id IS NULL AND LOWER(COALESCE(ca.email, '')) = $2)`,
-    [user.id, email]);
+      WHERE ca.user_id = $1`,
+    [user.id]);
   return rows.map(r => Number(r.id)).filter(Number.isSafeInteger);
 }
 async function ownsProfessionalBooking(db, user, booking) {
   const profileIds = await crewProfessionalIds(db, user);
   return profileIds.includes(Number(booking.professional_id));
 }
-const ownsBooking = (user, b) =>
-  (b.user_id != null && Number(b.user_id) === Number(user.id)) ||
-  (b.user_id == null && String(b.client_email || '').trim().toLowerCase() === String(user.email || '').trim().toLowerCase());
+const ownsBooking = (user, b) => b.user_id != null && Number(b.user_id) === Number(user.id);
 async function canAccessBooking(db, user, b) {
   // Account mode controls the interface, not ownership. Either participant can
   // retain access to their booking conversations after switching Hiring/Crew.
@@ -844,7 +879,7 @@ app.get('/api/health', (req, res) => res.json({ ok: true, version: '2.4.0' }));
 app.get('/api/professionals', wrap(async (req, res) => {
   const { role, location, category } = req.query;
   let query = "SELECT * FROM professionals WHERE status = 'approved' AND is_active = TRUE AND NOT EXISTS (" +
-    "SELECT 1 FROM crew_applications ca JOIN users u ON (u.id=ca.user_id OR LOWER(u.email)=LOWER(ca.email)) " +
+    "SELECT 1 FROM crew_applications ca JOIN users u ON u.id=ca.user_id " +
     "LEFT JOIN user_settings us ON us.user_id=u.id WHERE (ca.professional_id=professionals.id OR professionals.application_id='app-' || ca.id::text) AND COALESCE(us.profile_visibility,TRUE)=FALSE)";
   const params = [];
   if (role) { params.push(String(role)); query += ` AND role = $${params.length}`; }
@@ -900,8 +935,8 @@ app.get('/api/my/bookings', requireUser, wrap(async (req, res) => {
   const { rows } = await pool.query(
     `SELECT b.*, p.name AS professional_name, p.role AS professional_role
        FROM bookings b LEFT JOIN professionals p ON p.id = b.professional_id
-      WHERE b.user_id = $1 OR (b.user_id IS NULL AND LOWER(b.client_email) = $2)
-      ORDER BY b.created_at DESC`, [req.user.id, req.user.email]);
+      WHERE b.user_id = $1
+      ORDER BY b.created_at DESC`, [req.user.id]);
   res.json({ bookings: rows.map(b => ({ ...b, reference: b.reference || refFor(b.id) })) });
 }));
 
@@ -969,6 +1004,7 @@ app.post('/api/bookings/:id/counter-response', requireUser, wrap(async (req, res
 
 /* ---------------- payments & invoices ---------------- */
 app.post('/api/payments/initialize', requireUser, wrap(async (req, res) => {
+  if (!PAYMENTS_ENABLED) fail(503, 'Online payments are not available yet.');
   const b = await getAccessibleBooking(pool, req, req.body.booking_id);
   if (!ownsBooking(req.user, b)) fail(403, 'Only the client can pay for a booking.');
   if (['cancelled', 'declined', 'refunded'].includes(b.status)) fail(409, 'This booking cannot be paid.');
@@ -998,8 +1034,8 @@ app.post('/api/payments/webhook', wrap(async (req, res) => {
       const subtotal = total / 1.075;
       const booking = (await db.query('SELECT client_name FROM bookings WHERE id = $1', [payment.booking_id])).rows[0];
       await db.query(
-        `INSERT INTO invoices (invoice_number, booking_id, client_name, subtotal, vat_rate, vat_amount, total_amount) VALUES ($1,$2,$3,$4,7.5,$5,$6) ON CONFLICT (invoice_number) DO NOTHING`,
-        [`INV-${new Date().getUTCFullYear()}-${String(payment.id).padStart(6, '0')}`, payment.booking_id, (booking && booking.client_name) || 'Client', subtotal.toFixed(2), (total - subtotal).toFixed(2), total]);
+        `INSERT INTO invoices (invoice_number, booking_id, client_name, subtotal, vat_rate, vat_amount, total_amount, supplier_tin) VALUES ($1,$2,$3,$4,7.5,$5,$6,$7) ON CONFLICT (invoice_number) DO NOTHING`,
+        [`INV-${new Date().getUTCFullYear()}-${String(payment.id).padStart(6, '0')}`, payment.booking_id, (booking && booking.client_name) || 'Client', subtotal.toFixed(2), (total - subtotal).toFixed(2), total, SUPPLIER_TIN || null]);
       return { status: 'verified' };
     }
     await db.query(`UPDATE payments SET status = 'failed' WHERE id = $1`, [payment.id]);
@@ -1060,14 +1096,13 @@ function emitMessageNotification(userId,payload){
 async function getOtherParticipantId(db,user,booking){
   if(ownsBooking(user,booking)){
     const r=await db.query(
-      "SELECT COALESCE(ca.user_id,(SELECT u.id FROM users u WHERE LOWER(u.email)=LOWER(ca.email) LIMIT 1)) AS user_id " +
+      "SELECT ca.user_id AS user_id " +
       "FROM crew_applications ca JOIN professionals p ON (ca.professional_id=p.id OR p.application_id='app-' || ca.id::text) " +
-      "WHERE p.id=$1 AND (ca.user_id IS NOT NULL OR ca.email IS NOT NULL) ORDER BY ca.id DESC LIMIT 1",
+      "WHERE p.id=$1 AND ca.user_id IS NOT NULL ORDER BY ca.id DESC LIMIT 1",
       [booking.professional_id]);
     return r.rows[0]?.user_id?Number(r.rows[0].user_id):null;
   }
-  const r=await db.query("SELECT id FROM users WHERE id=$1 OR LOWER(email)=LOWER($2) ORDER BY CASE WHEN id=$1 THEN 0 ELSE 1 END LIMIT 1",
-    [booking.user_id,booking.client_email||'']);
+  const r=await db.query("SELECT id FROM users WHERE id=$1 LIMIT 1",[booking.user_id]);
   return r.rows[0]?Number(r.rows[0].id):null;
 }
 app.get('/api/messages/stream',requireUser,(req,res)=>{
@@ -1080,9 +1115,9 @@ app.get('/api/messages/stream',requireUser,(req,res)=>{
   req.on('close',()=>{clearInterval(ping);subs.delete(res);if(!subs.size)messageNotificationSubs.delete(uid);});
 });
 app.get('/api/inbox',requireUser,wrap(async(req,res)=>{
-  const uid=Number(req.user.id), email=String(req.user.email||'').trim().toLowerCase();
-  const client="(b.user_id=$1 OR (b.user_id IS NULL AND LOWER(COALESCE(b.client_email,''))=$2))";
-  const crew="EXISTS (SELECT 1 FROM professionals px JOIN crew_applications ca ON (ca.professional_id=px.id OR px.application_id='app-' || ca.id::text) WHERE px.id=b.professional_id AND (ca.user_id=$1 OR (ca.user_id IS NULL AND LOWER(COALESCE(ca.email,''))=$2)))";
+  const uid=Number(req.user.id);
+  const client="(b.user_id=$1)";
+  const crew="EXISTS (SELECT 1 FROM professionals px JOIN crew_applications ca ON (ca.professional_id=px.id OR px.application_id='app-' || ca.id::text) WHERE px.id=b.professional_id AND ca.user_id=$1)";
   const role="CASE WHEN "+client+" THEN 'client' ELSE 'crew' END";
   const {rows}=await pool.query(
     "SELECT b.id,COALESCE(b.reference,'') AS reference,b.client_name,b.project_type,b.status,b.created_at,p.name AS professional_name,"+role+" AS my_role,"+
@@ -1091,7 +1126,7 @@ app.get('/api/inbox',requireUser,wrap(async(req,res)=>{
     "(SELECT COUNT(*)::int FROM messages m WHERE m.booking_id=b.id AND ((m.sender_user_id IS NOT NULL AND m.sender_user_id<>$1) OR (m.sender_user_id IS NULL AND m.sender_type<>CASE WHEN "+client+" THEN 'client' ELSE 'crew' END)) "+
     "AND NOT EXISTS(SELECT 1 FROM message_reads mr WHERE mr.message_id=m.id AND mr.user_id=$1)) AS unread_count "+
     "FROM bookings b LEFT JOIN professionals p ON p.id=b.professional_id WHERE "+client+" OR "+crew+
-    " ORDER BY COALESCE((SELECT MAX(m.created_at) FROM messages m WHERE m.booking_id=b.id),b.created_at) DESC LIMIT 100",[uid,email]);
+    " ORDER BY COALESCE((SELECT MAX(m.created_at) FROM messages m WHERE m.booking_id=b.id),b.created_at) DESC LIMIT 100",[uid]);
   res.json({conversations:rows.map(b=>({...b,reference:b.reference||refFor(b.id),unread_count:Number(b.unread_count||0)}))});
 }));
 app.post('/api/inbox/:bookingId/read',requireUser,wrap(async(req,res)=>{
