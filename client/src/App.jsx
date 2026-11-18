@@ -63,7 +63,14 @@ function Shell() {
   const closeAuth = useCallback(() => setAuth(a => ({ ...a, open: false })), []);
   const openAuth = (mode = 'login', next = null, role = null) => setAuth({ open: true, mode, role, next });
   const openInbox = bookingId => {
-    if (!user) { openAuth('login', () => openInbox(bookingId)); return; }
+    if (!user) {
+      openAuth('login', () => {
+        setInboxInitialId(bookingId || null);
+        setInboxOpen(true);
+        setIncomingMessage(null);
+      });
+      return;
+    }
     setInboxInitialId(bookingId || null);
     setInboxOpen(true);
     setIncomingMessage(null);
