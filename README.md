@@ -37,11 +37,13 @@ This package contains the website plus a Node.js/Express API backed by PostgreSQ
 3. In Railway, add a **PostgreSQL** database service to the project.
 4. In the web service Variables, add `DATABASE_URL` by referencing the PostgreSQL service's `DATABASE_URL` variable. Railway may offer an “Add Reference” picker.
 5. Add `CMA_ADMIN_TOKEN` as a long, random secret (needed to use admin API endpoints). Do not put it in the HTML, Git repository, or share it publicly. Generate one locally with `openssl rand -hex 32`.
+6. Add `ID_ENCRYPTION_KEY` as a separate 32-byte encryption key for identity documents. Generate it locally with `openssl rand -hex 32`. Keep a secure backup. Do not commit it or share it. Losing or changing this key without re-encrypting the documents makes existing ID uploads unreadable.
 6. Set `NODE_ENV=production` in Railway Variables so session cookies use the `Secure` flag over HTTPS.
 7. Set `PAYMENTS_ENABLED=false`. Bachs.io checkout and payouts are not connected; this flag does not implement payments.
 8. Do not manually set `PORT` on Railway unless you have a specific reason; Railway injects it.
 9. Deploy. Railway runs `npm start` automatically. Open the generated public domain.
 10. Test `https://YOUR-DOMAIN/api/health`; it should return `ok: true` and `database: "connected"`.
+11. The account area supports profile editing, notification preferences and encrypted PDF/JPG/PNG identity uploads (maximum 5 MB). Review uploads in the admin **ID verification** tab. In-app message alerts use an authenticated event stream. The email-notification setting is a preference only until an email provider is configured.
 
 Node.js 20+ is required. Railway will install packages using `package.json`. The app binds to `0.0.0.0` and uses Railway's `PORT` variable.
 
