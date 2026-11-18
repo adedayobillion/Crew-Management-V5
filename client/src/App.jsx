@@ -5,6 +5,7 @@ import { MessageInbox, ProfilePage } from './Account.jsx';
 import { Banner, COVERS, CrewDashboard, Dashboard, Discover, Footer, Hero, How, Nav, SYMBOLS, Trust } from './sections.jsx';
 import { ScrollProgress, ToastProvider, useToast } from './ui.jsx';
 import { http, postJSON } from './lib.js';
+import { Mail } from 'lucide-react';
 
 function Shell() {
   const toast = useToast();
@@ -156,7 +157,7 @@ function Shell() {
             className="fixed bottom-5 right-4 z-[85] w-[min(380px,calc(100%-32px))] rounded-2xl border border-line bg-white p-4 shadow-2xl sm:right-6">
             <div className="flex items-start justify-between gap-3">
               <button type="button" onClick={() => openInbox(incomingMessage.booking_id)} className="min-w-0 flex-1 text-left">
-                <span className="flex items-center gap-2 text-xs font-extrabold text-[#5f7f22]"><span className="grid size-8 place-items-center rounded-full bg-lime-soft">✉</span>New message</span>
+                <span className="flex items-center gap-2 text-xs font-extrabold text-[#5f7f22]"><span className="grid size-8 place-items-center rounded-full bg-lime-soft"><Mail className="size-4" aria-hidden="true" /></span>New message</span>
                 <strong className="mt-2 block truncate text-sm">{incomingMessage.sender_name || 'New message'}</strong>
                 <span className="mt-1 block line-clamp-2 text-xs text-muted">{incomingMessage.preview || 'You have a new booking message.'}</span>
                 <span className="mt-2 block text-[11px] font-bold text-[#5f7f22]">Open conversation · {incomingMessage.reference || ''}</span>

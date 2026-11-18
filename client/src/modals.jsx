@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Button, Field, Modal, ModalHead, SlidingTabs, Tagline, inputCls, useToast } from './ui.jsx';
 import { naira, postJSON } from './lib.js';
 import { legalPolicies } from './legal.js';
+import { ArrowUpRight } from 'lucide-react';
 
 /* ================= Auth ================= */
 export function AuthModal({ open, mode, setMode, defaultRole, onClose, onSuccess, openLegal }) {
@@ -50,7 +51,7 @@ export function AuthModal({ open, mode, setMode, defaultRole, onClose, onSuccess
           )}
         </AnimatePresence>
         <AnimatePresence>{err && <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} role="alert" className="rounded-[10px] border border-[#f6d5d5] bg-[#fff0f0] px-3 py-2.5 text-xs text-[#a13232]">{err}</motion.div>}</AnimatePresence>
-        <Button variant="dark" type="submit" disabled={busy} className="w-full">{busy ? (reg ? 'Creating account…' : 'Signing in…') : (reg ? 'Create account securely ↗' : 'Log in securely ↗')}</Button>
+        <Button variant="dark" type="submit" disabled={busy} className="w-full">{busy ? (reg ? 'Creating account…' : 'Signing in…') : (reg ? <>Create account securely <ArrowUpRight className="size-4" aria-hidden="true" /></> : <>Log in securely <ArrowUpRight className="size-4" aria-hidden="true" /></>)}</Button>
       </form>
       <p className="mt-4 text-center text-[11px] leading-relaxed text-muted">Your account is protected with a hashed password and a secure, HTTP-only session cookie. Use a unique password for this platform.</p>
     </Modal>
@@ -94,7 +95,7 @@ export function BookingModal({ pro, user, onClose, onSent, onNeedAuth }) {
           <Field label="Email *" htmlFor="clientEmail"><input id="clientEmail" className={inputCls} readOnly value={user?.email || ''} /></Field>
           <Field label="Project type *" htmlFor="projectType"><select id="projectType" required className={inputCls} value={f.projectType} onChange={set('projectType')}><option value="">Choose project</option>{['Film / TV', 'Commercial / advert', 'Music video', 'Digital content', 'Documentary', 'Other'].map(o => <option key={o}>{o}</option>)}</select></Field>
           <Field label="Booking type *" htmlFor="bookingUnit"><select id="bookingUnit" required className={inputCls} value={f.unit} onChange={set('unit')}><option value="full">Full day(s) — choose dates</option><option value="half">Half-day — single date</option></select></Field>
-          <Field label="Start date *" htmlFor="projectDate"><input id="projectDate" type="date" required className={inputCls} value={f.start} onChange={set('start')} /></Field>
+          <Field label="Start date *" htmlFor="projectDate"><input id="projectDate" type="date" required min={new Date(Date.now() + 3600000).toISOString().slice(0, 10)} className={inputCls} value={f.start} onChange={set('start')} /></Field>
           <Field label="End date *" htmlFor="projectEndDate"><input id="projectEndDate" type="date" required className={inputCls} value={f.end} min={f.start || undefined} disabled={f.unit === 'half'} onChange={set('end')} /></Field>
           <Field label="Production location *" htmlFor="projectLocation" full><input id="projectLocation" required className={inputCls} value={f.location} onChange={set('location')} placeholder="e.g. Lekki, Lagos" /></Field>
           <Field label="Proposed overtime rate / terms" htmlFor="overtimeTerms" full><input id="overtimeTerms" className={inputCls} value={f.overtime} onChange={set('overtime')} placeholder="e.g. ₦15,000 per additional hour, subject to crew agreement" /></Field>
@@ -111,7 +112,7 @@ export function BookingModal({ pro, user, onClose, onSent, onNeedAuth }) {
           <div className="mt-1.5 flex justify-between gap-4 border-t border-[#dfe4dc] pt-2.5 text-sm font-extrabold"><span>Client total before processing fees</span><motion.strong key={m.clientTotal} initial={{ scale: 1.15, color: '#527a14' }} animate={{ scale: 1, color: '#172337' }}>{naira(m.clientTotal)}</motion.strong></div>
         </div>
         <p className="my-2.5 text-[11px] text-muted">Daily rates support full-day bookings across selected calendar dates or a half-day booking on one date (estimated at 50% of the daily rate). Any overtime rate and terms must be agreed by the client and crew before booking confirmation. Commission: 10% client fee added and 10% crew commission deducted. Payout is intended after project completion. Payments are currently disabled; no money is collected through this website.</p>
-        <Button variant="dark" type="submit" disabled={busy} className="w-full">{busy ? 'Sending request…' : 'Send booking request ↗'}</Button>
+        <Button variant="dark" type="submit" disabled={busy} className="w-full">{busy ? 'Sending request…' : <>Send booking request <ArrowUpRight className="size-4" aria-hidden="true" /></>}</Button>
       </form>
     </Modal>
   );
@@ -144,7 +145,7 @@ export function JoinModal({ open, user, onClose, onDone, onNeedAuth }) {
           <Field label="Skills and experience *" htmlFor="crewBio" full><textarea id="crewBio" required className={inputCls + ' min-h-24'} value={f.bio} onChange={set('bio')} placeholder="Summarise your experience, credits and skills." /></Field>
         </div>
         <p className="my-3 text-[11px] text-muted">Submitting this form creates an application for review; it does not automatically publish a profile or guarantee work.</p>
-        <Button variant="dark" type="submit" disabled={busy} className="w-full">{busy ? 'Submitting…' : 'Prepare crew application ↗'}</Button>
+        <Button variant="dark" type="submit" disabled={busy} className="w-full">{busy ? 'Submitting…' : <>Prepare crew application <ArrowUpRight className="size-4" aria-hidden="true" /></>}</Button>
       </form>
     </Modal>
   );

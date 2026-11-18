@@ -912,6 +912,8 @@ app.post('/api/bookings', requireUser, requireApproved, wrap(async (req, res) =>
   const days = unit === 'half' ? 0.5 : daysBetween(start, end);
   if (days > 90) fail(400, 'Bookings longer than 90 days must be arranged with support.');
 
+  const recent = await pool.query(`SELECT COUNT(*)::int AS n FROM bookings WHERE user_id = $1 AND created_at > NOW() - INTERVAL '24 hours'`, [req.user.id]);
+  if (recent.rows[0].n >= 10) fail(429, 'You have reached the limit of 10 booking requests per 24 hours.');
   const booking = await withTx(async db => {
     const p = (await db.query(`SELECT id, name, role, rate FROM professionals WHERE id = $1 AND status = 'approved' AND is_active = TRUE FOR UPDATE`, [proId])).rows[0];
     if (!p) fail(404, 'This crew member is not available.');
@@ -928,6 +930,7 @@ app.post('/api/bookings', requireUser, requireApproved, wrap(async (req, res) =>
     await db.query('UPDATE bookings SET reference = $1 WHERE id = $2', [ref, row.id]);
     return { ...row, reference: ref, professional_name: p.name, professional_role: p.role };
   });
+  notifyBooking(await crewUserIdsFor(pool, proId), booking, 'New booking request', booking.reference + ' (' + fmtRange(booking) + ') from ' + booking.client_name + '.');
   res.status(201).json({ success: true, booking });
 }));
 
@@ -940,6 +943,18 @@ app.get('/api/my/bookings', requireUser, wrap(async (req, res) => {
   res.json({ bookings: rows.map(b => ({ ...b, reference: b.reference || refFor(b.id) })) });
 }));
 
+// Statuses in which a booking holds an availability block on the professional's calendar.
+const BLOCKING_STATUSES = ['confirmed', 'in_progress', 'completion_review', 'completed', 'disputed'];
+const fmtRange = b => (b.start_date === b.end_date ? b.start_date : b.start_date + ' to ' + b.end_date);
+async function crewUserIdsFor(db, professionalId) {
+  const r = await db.query(
+    "SELECT DISTINCT ca.user_id FROM crew_applications ca JOIN professionals p ON (ca.professional_id=p.id OR p.application_id='app-' || ca.id::text) WHERE p.id=$1 AND ca.user_id IS NOT NULL", [professionalId]);
+  return r.rows.map(x => Number(x.user_id));
+}
+// Live pop-up for booking lifecycle events (the same stream the message alerts use).
+function notifyBooking(userIds, b, title, preview) {
+  for (const uid of userIds) if (uid) emitMessageNotification(uid, { type: 'booking', booking_id: b.id, reference: b.reference || refFor(b.id), sender_name: title, preview, created_at: new Date().toISOString() });
+}
 app.post('/api/bookings/:id/cancel', requireUser, wrap(async (req, res) => {
   const id = toInt(req.params.id); if (!id) fail(400, 'Invalid booking id.');
   const booking = await withTx(async db => {
@@ -949,12 +964,18 @@ app.post('/api/bookings/:id/cancel', requireUser, wrap(async (req, res) => {
     if (['cancelled', 'completed', 'refunded'].includes(b.status)) fail(409, 'This booking can no longer be cancelled.');
     if (b.payment_status === 'paid') fail(409, 'Paid bookings must be cancelled through support so a refund can be arranged.');
     const upd = await db.query(`UPDATE bookings SET status = 'cancelled' WHERE id = $1 RETURNING *`, [id]);
-    await db.query(
-      `DELETE FROM availability_blocks WHERE id = (SELECT id FROM availability_blocks WHERE professional_id = $1 AND start_date = $2 AND end_date = $3 AND reason = 'confirmed booking' LIMIT 1)`,
-      [b.professional_id, b.start_date, b.end_date]);
-    return upd.rows[0];
+    // Only a booking that was confirmed holds a block. Freeing one for a pending/declined request would delete
+    // the block of a different, confirmed booking on the same dates and let the professional be double-booked.
+    if (BLOCKING_STATUSES.includes(b.status)) {
+      await db.query(
+        `DELETE FROM availability_blocks WHERE id = (SELECT id FROM availability_blocks WHERE professional_id = $1 AND start_date = $2 AND end_date = $3 AND reason = 'confirmed booking' LIMIT 1)`,
+        [b.professional_id, b.start_date, b.end_date]);
+    }
+    return { ...upd.rows[0], _crew: await crewUserIdsFor(db, b.professional_id) };
   });
-  res.json({ success: true, booking });
+  const { _crew, ...cancelled } = booking;
+  notifyBooking(_crew, cancelled, 'Booking cancelled', 'The client cancelled ' + (cancelled.reference || refFor(cancelled.id)) + ' (' + fmtRange(cancelled) + ').');
+  res.json({ success: true, booking: cancelled });
 }));
 
 /* ---------------- crew response ---------------- */
@@ -975,9 +996,12 @@ app.post('/api/crew/bookings/:id/respond', requireUser, wrap(async (req, res) =>
       await db.query(`INSERT INTO availability_blocks (professional_id, start_date, end_date, reason) VALUES ($1,$2,$3,'confirmed booking')`, [b.professional_id, b.start_date, b.end_date]);
     }
     await db.query('UPDATE bookings SET crew_response = $1, status = $2, counter_details = $3 WHERE id = $4', [response, newStatus, response === 'countered' ? str(req.body.counter_details, 1000) || null : null, id]);
-    return { status: newStatus, crew_response: response };
+    return { status: newStatus, crew_response: response, _b: b };
   });
-  res.json({ success: true, ...result });
+  const { _b, ...result_ } = result;
+  notifyBooking([Number(_b.user_id)], _b, response === 'accepted' ? 'Booking accepted' : response === 'declined' ? 'Booking declined' : 'Counter-offer received',
+    (_b.reference || refFor(_b.id)) + ' (' + fmtRange(_b) + ')' + (response === 'countered' ? ': open it to review the crew member\'s terms.' : '.'));
+  res.json({ success: true, ...result_ });
 }));
 
 /* ---------------- hirer response to a crew counter-offer ---------------- */
@@ -997,9 +1021,11 @@ app.post('/api/bookings/:id/counter-response', requireUser, wrap(async (req, res
       await db.query(`INSERT INTO availability_blocks (professional_id, start_date, end_date, reason) VALUES ($1,$2,$3,'confirmed booking')`, [b.professional_id, b.start_date, b.end_date]);
     }
     const upd = await db.query('UPDATE bookings SET status = $1 WHERE id = $2 RETURNING *', [response === 'approved' ? 'confirmed' : 'declined', id]);
-    return upd.rows[0];
+    return { ...upd.rows[0], _crew: await crewUserIdsFor(db, b.professional_id) };
   });
-  res.json({ success: true, booking });
+  const { _crew, ...answered } = booking;
+  notifyBooking(_crew, answered, response === 'approved' ? 'Counter-offer accepted' : 'Counter-offer declined', (answered.reference || refFor(answered.id)) + ' (' + fmtRange(answered) + ').');
+  res.json({ success: true, booking: answered });
 }));
 
 /* ---------------- payments & invoices ---------------- */
@@ -1008,6 +1034,7 @@ app.post('/api/payments/initialize', requireUser, wrap(async (req, res) => {
   const b = await getAccessibleBooking(pool, req, req.body.booking_id);
   if (!ownsBooking(req.user, b)) fail(403, 'Only the client can pay for a booking.');
   if (['cancelled', 'declined', 'refunded'].includes(b.status)) fail(409, 'This booking cannot be paid.');
+  if (!BLOCKING_STATUSES.includes(b.status)) fail(409, 'You can pay once the crew member has accepted this booking.');
   if (b.payment_status === 'paid') fail(409, 'This booking is already paid.');
   const amount = Number(b.client_total);
   if (!(amount > 0)) fail(400, 'This booking has no payable amount.');
@@ -1319,8 +1346,15 @@ app.patch('/api/admin/bookings/:ref/status', adminGuard, wrap(async (req, res) =
   if (!BOOKING_STATUSES.includes(status)) fail(400, 'Status must be one of: ' + BOOKING_STATUSES.join(', ') + '.');
   await withTx(async db => {
     const b = await findBookingByRef(db, req.params.ref);
+    if (['cancelled', 'declined'].includes(b.status) && BLOCKING_STATUSES.includes(status)) fail(409, 'A ' + b.status + ' booking cannot be reactivated. Ask the client to submit a new request.');
+    if (BLOCKING_STATUSES.includes(status) && !BLOCKING_STATUSES.includes(b.status)) {
+      await db.query('SELECT id FROM professionals WHERE id = $1 FOR UPDATE', [b.professional_id]);
+      const clash = await db.query(`SELECT 1 FROM availability_blocks WHERE professional_id = $1 AND NOT (end_date < $2 OR start_date > $3) LIMIT 1`, [b.professional_id, b.start_date, b.end_date]);
+      if (clash.rows.length) fail(409, 'The professional already has a confirmed booking on these dates.');
+      await db.query(`INSERT INTO availability_blocks (professional_id, start_date, end_date, reason) VALUES ($1,$2,$3,'confirmed booking')`, [b.professional_id, b.start_date, b.end_date]);
+    }
     await db.query('UPDATE bookings SET status = $1 WHERE id = $2', [status, b.id]);
-    if (['cancelled', 'refunded', 'declined'].includes(status)) {
+    if (['cancelled', 'refunded', 'declined'].includes(status) && BLOCKING_STATUSES.includes(b.status)) {
       await db.query(`DELETE FROM availability_blocks WHERE id = (SELECT id FROM availability_blocks WHERE professional_id = $1 AND start_date = $2 AND end_date = $3 AND reason = 'confirmed booking' LIMIT 1)`, [b.professional_id, b.start_date, b.end_date]);
     }
     await audit(db, req, 'booking_status', { id: b.user_id, name: b.client_name, email: b.client_email }, { reference: b.reference || refFor(b.id), status });
