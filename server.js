@@ -322,10 +322,13 @@ async function initDb() {
     const repairs = `
       ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS user_id INT REFERENCES users(id) ON DELETE SET NULL;
       ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS name TEXT;
+      ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS full_name TEXT;
       ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS email TEXT;
       ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS role TEXT;
       ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS location TEXT;
       ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS portfolio TEXT;
+      ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS portfolio_url TEXT DEFAULT '';
+      ALTER TABLE crew_applications ALTER COLUMN portfolio_url SET DEFAULT '';
       ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS bio TEXT;
       ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS status VARCHAR(30) NOT NULL DEFAULT 'pending';
       ALTER TABLE crew_applications ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
@@ -334,6 +337,10 @@ async function initDb() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP;
       ALTER TABLE professionals ADD COLUMN IF NOT EXISTS application_id VARCHAR(255);
       ALTER TABLE professionals ADD COLUMN IF NOT EXISTS job_title TEXT;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS daily_rate BIGINT;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS description TEXT;
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;
+      ALTER TABLE professionals ALTER COLUMN active SET DEFAULT TRUE;
       ALTER TABLE professionals ADD COLUMN IF NOT EXISTS category TEXT;
       ALTER TABLE professionals ADD COLUMN IF NOT EXISTS location TEXT;
       ALTER TABLE professionals ADD COLUMN IF NOT EXISTS bio TEXT;
@@ -425,7 +432,9 @@ async function initDb() {
       ALTER TABLE sessions ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;
       ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
       ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS action TEXT;
-      ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS target_user_id INT;
+      ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS actor VARCHAR(120) NOT NULL DEFAULT 'admin';
+      ALTER TABLE admin_audit_log ALTER COLUMN actor SET DEFAULT 'admin';
+      ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS target_user_id BIGINT;
       ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS target_name TEXT;
       ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS target_email TEXT;
       ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS details JSONB DEFAULT '{}'::jsonb;
@@ -624,11 +633,11 @@ app.patch('/api/profile', requireUser, wrap(async (req, res) => {
       [name, phone || null, location || null, bio || null, req.user.id]);
     // Keep the public crew listing in sync with the account owner’s editable profile.
     const applications = await db.query(
-      'UPDATE crew_applications SET name=$1, email=$2, location=$3, bio=$4 WHERE user_id=$5 OR (user_id IS NULL AND LOWER(email)=LOWER($2)) RETURNING id, professional_id',
+      'UPDATE crew_applications SET name=$1, full_name=$1, email=$2, location=$3, bio=$4 WHERE user_id=$5 OR (user_id IS NULL AND LOWER(email)=LOWER($2)) RETURNING id, professional_id',
       [name, updated.rows[0].email, location || null, bio || null, req.user.id]);
     for (const application of applications.rows) {
       await db.query(
-        "UPDATE professionals SET name=$1, location=$2, bio=$3, \"desc\"=$4 WHERE id=$5 OR application_id=$6",
+        "UPDATE professionals SET name=$1, location=$2, bio=$3, \"desc\"=$4, description=$3 WHERE id=$5 OR application_id=$6",
         [name, location || null, bio || null, bio.slice(0,200), application.professional_id, 'app-' + application.id]);
     }
     return updated.rows;
@@ -755,8 +764,8 @@ function requireAdmin(req, res, next) {
 const adminGuard = [adminFailLimiter, requireAdmin];
 async function audit(db, req, action, target, details) {
   await db.query(
-    `INSERT INTO admin_audit_log (action, target_user_id, target_name, target_email, details, ip_address) VALUES ($1,$2,$3,$4,$5,$6)`,
-    [action, target ? target.id : null, target ? target.name : null, target ? target.email : null, JSON.stringify(details || {}), req.ip]);
+    `INSERT INTO admin_audit_log (action, actor, target_user_id, target_name, target_email, details, ip_address) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [action, 'admin', target ? target.id : null, target ? target.name : null, target ? target.email : null, JSON.stringify(details || {}), req.ip]);
 }
 
 /* ---------------- access helpers ---------------- */
@@ -1130,8 +1139,8 @@ app.post('/api/crew-applications', requireUser, requireApproved, wrap(async (req
   const dup = await pool.query(`SELECT id FROM crew_applications WHERE user_id = $1 AND status = 'pending'`, [req.user.id]);
   if (dup.rows.length) fail(409, 'You already have an application under review (#' + dup.rows[0].id + ').');
   const { rows } = await pool.query(
-    `INSERT INTO crew_applications (user_id, name, email, role, location, portfolio, bio) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-    [req.user.id, req.user.name, req.user.email, role, location, portfolio, bio]);
+    `INSERT INTO crew_applications (user_id, name, full_name, email, role, location, portfolio, portfolio_url, bio) VALUES ($1,$2,$2,$3,$4,$5,$6,$6,$7) RETURNING *`,
+    [req.user.id, req.user.name, req.user.email, role, location, portfolio || '', bio]);
   res.status(201).json({ success: true, application: rows[0] });
 }));
 
@@ -1288,9 +1297,9 @@ app.post('/api/admin/applications/:id/create-profile', adminGuard, wrap(async (r
     if (a.status === 'rejected') fail(409, 'This application was rejected. Approve it first.');
     const verified = a.user_id ? !!((await db.query('SELECT is_verified FROM users WHERE id = $1', [a.user_id])).rows[0] || {}).is_verified : false;
     const p = (await db.query(
-      `INSERT INTO professionals (application_id, name, role, category, location, bio, "desc", rate, rate_full_day, rate_half_day, skills, verified, status, credits)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8,$9,$10,$11,'approved','') RETURNING *`,
-      ['app-' + id, a.name, a.role, category, a.location || '', a.bio, (a.bio || '').slice(0, 200), dailyRate, Math.round(dailyRate / 2), SKILLS_IS_JSON ? '[]' : [], verified])).rows[0];
+      `INSERT INTO professionals (application_id, name, role, category, location, bio, "desc", description, rate, daily_rate, rate_full_day, rate_half_day, skills, verified, status, credits, active, is_active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$8,$8,$8,$9,$10,$11,'approved','',TRUE,TRUE) RETURNING *`,
+      ['app-' + id, a.name || a.full_name, a.role, category, a.location || '', a.bio || '', (a.bio || '').slice(0, 200), dailyRate, Math.round(dailyRate / 2), SKILLS_IS_JSON ? '[]' : [], verified])).rows[0];
     await db.query(`UPDATE crew_applications SET professional_id = $1, status = 'approved' WHERE id = $2`, [p.id, id]);
     await audit(db, req, 'create_profile', { id: a.user_id, name: a.name, email: a.email }, { reference: '#' + id, status: 'profile ' + p.id });
     return p;
