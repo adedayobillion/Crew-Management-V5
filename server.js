@@ -593,14 +593,14 @@ app.post('/api/auth/switch-mode', requireUser, wrap(async (req, res) => {
   res.json({ success: true, user: publicUser(rows[0]) });
 }));
 
-// Crew workspace: booking requests for the logged-in user's own crew profile
+// Crew workspace: show requests for every professional profile owned by this account.
 app.get('/api/crew/bookings', requireUser, wrap(async (req, res) => {
-  const proId = await crewProfessionalId(pool, req.user.id);
+  const proIds = await crewProfessionalIds(pool, req.user);
   const app_ = (await pool.query('SELECT id, status, professional_id FROM crew_applications WHERE user_id = $1 ORDER BY id DESC LIMIT 1', [req.user.id])).rows[0] || null;
-  if (!proId) return res.json({ hasProfile: false, application: app_ ? { id: app_.id, status: app_.status } : null, bookings: [] });
+  if (!proIds.length) return res.json({ hasProfile: false, application: app_ ? { id: app_.id, status: app_.status } : null, bookings: [] });
   const { rows } = await pool.query(
     `SELECT id, reference, client_name, project_type, project_location, start_date, end_date, booking_unit, status, crew_response, crew_net, project_brief, overtime_terms, counter_details, payment_status
-       FROM bookings WHERE professional_id = $1 ORDER BY created_at DESC LIMIT 200`, [proId]); // client email/phone are deliberately not shared
+       FROM bookings WHERE professional_id = ANY($1::int[]) ORDER BY created_at DESC LIMIT 200`, [proIds]); // client email/phone are deliberately not shared
   res.json({ hasProfile: true, application: app_ ? { id: app_.id, status: app_.status } : null, bookings: rows.map(b => ({ ...b, reference: b.reference || refFor(b.id) })) });
 }));
 
@@ -621,15 +621,32 @@ async function audit(db, req, action, target, details) {
 }
 
 /* ---------------- access helpers ---------------- */
-async function crewProfessionalId(db, userId) {
-  const r = await db.query(`SELECT professional_id FROM crew_applications WHERE user_id = $1 AND professional_id IS NOT NULL ORDER BY id DESC LIMIT 1`, [userId]);
-  return r.rows[0] ? r.rows[0].professional_id : null;
+// Resolve every crew profile linked to this account. The application_id fallback
+// also recognises profiles created by earlier versions if the direct link is absent.
+async function crewProfessionalIds(db, user) {
+  const email = String(user.email || '').trim().toLowerCase();
+  const { rows } = await db.query(
+    `SELECT DISTINCT p.id
+       FROM professionals p
+       JOIN crew_applications ca
+         ON (ca.professional_id = p.id OR p.application_id = 'app-' || ca.id::text)
+      WHERE ca.user_id = $1
+         OR (ca.user_id IS NULL AND LOWER(COALESCE(ca.email, '')) = $2)`,
+    [user.id, email]);
+  return rows.map(r => Number(r.id)).filter(Number.isSafeInteger);
 }
-const ownsBooking = (user, b) => b.user_id === user.id || (b.user_id == null && String(b.client_email || '').toLowerCase() === user.email);
+async function ownsProfessionalBooking(db, user, booking) {
+  const profileIds = await crewProfessionalIds(db, user);
+  return profileIds.includes(Number(booking.professional_id));
+}
+const ownsBooking = (user, b) =>
+  (b.user_id != null && Number(b.user_id) === Number(user.id)) ||
+  (b.user_id == null && String(b.client_email || '').trim().toLowerCase() === String(user.email || '').trim().toLowerCase());
 async function canAccessBooking(db, user, b) {
+  // Account mode controls the interface, not ownership. Either participant can
+  // retain access to their booking conversations after switching Hiring/Crew.
   if (ownsBooking(user, b)) return true;
-  if (user.account_type === 'crew') return (await crewProfessionalId(db, user.id)) === b.professional_id;
-  return false;
+  return ownsProfessionalBooking(db, user, b);
 }
 async function getAccessibleBooking(db, req, rawId) {
   const id = toInt(rawId); if (!id) fail(400, 'Invalid booking id.');
@@ -668,7 +685,7 @@ app.post('/api/bookings', requireUser, requireApproved, wrap(async (req, res) =>
   const end = unit === 'half' ? b.startDate : b.endDate;
   const projectType = str(b.projectType, 100);
   if (!proId) fail(400, 'Please choose a crew member.');
-  if ((await crewProfessionalId(pool, req.user.id)) === proId) fail(400, 'You cannot book your own crew profile.');
+  if ((await crewProfessionalIds(pool, req.user)).includes(proId)) fail(400, 'You cannot book your own crew profile.');
   if (!projectType) fail(400, 'Please select a project type.');
   if (!isDate(start) || !isDate(end)) fail(400, 'Please choose valid start and end dates.');
   if (start < todayLagos()) fail(400, 'The start date cannot be in the past.');
@@ -729,7 +746,7 @@ app.post('/api/crew/bookings/:id/respond', requireUser, wrap(async (req, res) =>
   const result = await withTx(async db => {
     const b = (await db.query('SELECT * FROM bookings WHERE id = $1 FOR UPDATE', [id])).rows[0];
     if (!b) fail(404, 'Booking not found.');
-    if ((await crewProfessionalId(db, req.user.id)) !== b.professional_id) fail(403, 'This booking is not assigned to you.');
+    if (!(await ownsProfessionalBooking(db, req.user, b))) fail(403, 'This booking is not assigned to you.');
     if (!['awaiting_review', 'pending'].includes(b.status)) fail(409, 'This booking can no longer be responded to.');
     let newStatus = response === 'accepted' ? 'confirmed' : response === 'declined' ? 'declined' : 'counter_pending';
     if (response === 'accepted') {
