@@ -21,7 +21,7 @@ function ModeSwitch({ user, onSwitch, className }) {
   );
 }
 
-export function Nav({ user, onLogin, onLogout, onDashboard, onCrewDashboard, onSwitch, onHome, onJoin }) {
+export function Nav({ user, onLogin, onLogout, onDashboard, onCrewDashboard, onSwitch, onHome, onJoin, onProfile, onMessages, unreadCount = 0 }) {
   const [open, setOpen] = useState(false);
   const crewMode = !!user && user.accountType === 'crew';
   const workspace = crewMode ? onCrewDashboard : onDashboard;
@@ -42,8 +42,13 @@ export function Nav({ user, onLogin, onLogout, onDashboard, onCrewDashboard, onS
               <a key={h} href={h} onClick={h === '#join' ? undefined : () => onHome()} className="group/l relative py-1.5 transition-colors hover:text-[#4d6f12]">{l}<span className="absolute inset-x-0 bottom-0 h-0.5 origin-left scale-x-0 rounded bg-lime-deep transition-transform duration-300 group-hover/l:scale-x-100" /></a>
             ))}
           </nav>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2">
             {user && <ModeSwitch user={user} onSwitch={onSwitch} className="max-sm:hidden" />}
+            <button type="button" onClick={onMessages} aria-label="Messages" title="Messages" className="relative grid size-9 place-items-center rounded-xl text-lg text-ink transition hover:bg-[#edf1f5]">
+              <span aria-hidden="true">✉</span>
+              {unreadCount > 0 && <span className="absolute -right-0.5 -top-0.5 grid min-w-[17px] place-items-center rounded-full bg-[#d84b4b] px-1 text-[9px] font-extrabold leading-[17px] text-white">{unreadCount > 99 ? '99+' : unreadCount}</span>}
+            </button>
+            <button type="button" onClick={onProfile} aria-label="Profile" title="Profile" className="grid size-9 place-items-center rounded-xl text-lg text-ink transition hover:bg-[#edf1f5]">◉</button>
             <Button size="sm" variant="ghost" onClick={user ? onLogout : onLogin}>{user ? 'Log out' : 'Log in'}</Button>
             <Button size="sm" className="max-[480px]:hidden" onClick={workspace}>{workspaceLabel}</Button>
             <button className="grid size-9 place-items-center rounded-lg text-xl md:hidden" aria-label="Open menu" aria-expanded={open} onClick={() => setOpen(o => !o)}>{open ? '✕' : '☰'}</button>
@@ -54,6 +59,8 @@ export function Nav({ user, onLogin, onLogout, onDashboard, onCrewDashboard, onS
                 className="absolute inset-x-0 top-[calc(100%+8px)] flex flex-col gap-1 rounded-2xl border border-line bg-white p-3 text-sm font-bold shadow-soft md:hidden">
                 {links.map(([h, l]) => <a key={h} href={h} onClick={() => setOpen(false)} className="rounded-xl px-3 py-3 hover:bg-lime-soft">{l}</a>)}
                 {user && <ModeSwitch user={user} onSwitch={m => { setOpen(false); onSwitch(m); }} className="mx-1 my-1 sm:hidden [&>button]:py-2.5" />}
+                <button type="button" onClick={() => { setOpen(false); onProfile(); }} className="rounded-xl px-3 py-3 text-left hover:bg-lime-soft">My profile & settings</button>
+                <button type="button" onClick={() => { setOpen(false); onMessages(); }} className="flex items-center justify-between rounded-xl px-3 py-3 text-left hover:bg-lime-soft"><span>Messages</span>{unreadCount > 0 && <span className="rounded-full bg-[#d84b4b] px-2 py-0.5 text-[10px] font-bold text-white">{unreadCount}</span>}</button>
                 <button type="button" onClick={() => { setOpen(false); workspace(); }} className="rounded-xl bg-lime px-3 py-3 text-left min-[481px]:hidden">{workspaceLabel}</button>
               </motion.nav>
             )}
@@ -265,7 +272,7 @@ function Chat({ bookingId, title, mine: mineType, onClose }) {
 }
 
 /* ---------- Client workspace ---------- */
-export function Dashboard({ onBack, onJoin, openAuth, toast, user }) {
+export function Dashboard({ onBack, onJoin, openAuth, toast, user, onMessages }) {
   const [chat, setChat] = useState(null);
   const [rows, setRows] = useState(null); const [error, setError] = useState('');
   async function load() {
@@ -308,7 +315,7 @@ export function Dashboard({ onBack, onJoin, openAuth, toast, user }) {
               <div><strong>{b.pro}</strong><br /><span className="text-muted">{b.role}</span></div>
               <div>{b.type}<br /><span className="text-muted">{b.date || 'Date to agree'}{b.end && b.end !== b.date ? ' to ' + b.end : ''} · {b.unit === 'half' ? 'Half-day · ' : ''}{b.location}</span></div>
               <div><span className="inline-flex items-center gap-1.5 rounded-full bg-[#fff1d7] px-2.5 py-1 text-[10px] font-extrabold capitalize text-[#8b5c09]"><span className="size-[5px] rounded-full bg-current" />{b.status}</span><br /><span className="text-muted">Ref: {b.id}</span></div>
-              <div><strong>{naira(b.clientTotal)}</strong><br /><span className="text-muted">client total · estimated crew payout {naira(b.crewNet)}</span><div className="mt-2"><Button size="sm" variant="ghost" onClick={() => setChat({ id: b.dbId, title: b.pro + ' · ' + b.id })}>Messages</Button></div></div>
+              <div><strong>{naira(b.clientTotal)}</strong><br /><span className="text-muted">client total · estimated crew payout {naira(b.crewNet)}</span><div className="mt-2"><Button size="sm" variant="ghost" onClick={() => onMessages?.(b.dbId)}>Messages</Button></div></div>
               {b.status === 'counter pending' && <div className="rounded-xl bg-[#fff8e8] p-3 sm:col-span-full"><strong>Counter-offer from {b.pro}</strong><p className="my-1.5 whitespace-pre-wrap text-muted">{b.counter || 'No details provided.'}</p><div className="flex flex-wrap gap-1.5"><Button size="sm" disabled={busy === b.dbId} onClick={() => answerCounter(b.dbId, 'approved')}>Approve</Button><Button size="sm" variant="ghost" disabled={busy === b.dbId} onClick={() => answerCounter(b.dbId, 'rejected')}>Reject</Button></div></div>}
             </motion.div>
           ))}
@@ -320,7 +327,7 @@ export function Dashboard({ onBack, onJoin, openAuth, toast, user }) {
 }
 
 /* ---------- Crew workspace ---------- */
-export function CrewDashboard({ onBack, onJoin, toast, user }) {
+export function CrewDashboard({ onBack, onJoin, toast, user, onMessages }) {
   const [chat, setChat] = useState(null);
   const [data, setData] = useState(null); const [error, setError] = useState(''); const [busy, setBusy] = useState(0);
   async function load() {
@@ -373,7 +380,7 @@ export function CrewDashboard({ onBack, onJoin, toast, user }) {
                   <div>{String(b.start_date).slice(0, 10)}{b.end_date !== b.start_date ? ' to ' + String(b.end_date).slice(0, 10) : ''}{b.booking_unit === 'half' ? ' · Half-day' : ''}<br /><span className="text-muted">{b.project_brief ? b.project_brief.slice(0, 90) : 'No brief provided'}</span></div>
                   <div><span className="inline-flex items-center gap-1.5 rounded-full bg-[#fff1d7] px-2.5 py-1 text-[10px] font-extrabold capitalize text-[#8b5c09]"><span className="size-[5px] rounded-full bg-current" />{String(b.status).replaceAll('_', ' ')}</span><br /><span className="text-muted">Ref: {b.reference}</span></div>
                   <div><strong>{naira(b.crew_net)}</strong> <span className="text-muted">your payout</span>
-                    <div className="mt-2"><Button size="sm" variant="ghost" onClick={() => setChat({ id: b.id, title: b.client_name + ' · ' + b.reference })}>Messages</Button></div>
+                    <div className="mt-2"><Button size="sm" variant="ghost" onClick={() => onMessages?.(b.id)}>Messages</Button></div>
                     {open && <div className="mt-2 flex flex-wrap gap-1.5"><Button size="sm" disabled={busy === b.id} onClick={() => respond(b.id, 'accepted')}>Accept</Button><Button size="sm" variant="ghost" disabled={busy === b.id} onClick={() => respond(b.id, 'countered')}>Counter</Button><Button size="sm" variant="ghost" disabled={busy === b.id} onClick={() => respond(b.id, 'declined')}>Decline</Button></div>}
                   </div>
                 </motion.div>
