@@ -48,7 +48,7 @@ export function Nav({ user, onLogin, onLogout, onDashboard, onCrewDashboard, onS
               <span aria-hidden="true">✉</span>
               {unreadCount > 0 && <span className="absolute -right-0.5 -top-0.5 grid min-w-[17px] place-items-center rounded-full bg-[#d84b4b] px-1 text-[9px] font-extrabold leading-[17px] text-white">{unreadCount > 99 ? '99+' : unreadCount}</span>}
             </button>
-            <button type="button" onClick={onProfile} aria-label="Profile" title="Profile" className="grid size-9 place-items-center rounded-xl text-lg text-ink transition hover:bg-[#edf1f5]">◉</button>
+            <button type="button" onClick={onProfile} aria-label="Profile" title="Profile" className="flex h-9 items-center justify-center gap-1.5 rounded-xl px-2 text-sm font-bold text-ink transition hover:bg-[#edf1f5]"><span aria-hidden="true" className="text-lg">◉</span><span className="hidden sm:inline">Profile</span></button>
             <Button size="sm" variant="ghost" onClick={user ? onLogout : onLogin}>{user ? 'Log out' : 'Log in'}</Button>
             <Button size="sm" className="max-[480px]:hidden" onClick={workspace}>{workspaceLabel}</Button>
             <button className="grid size-9 place-items-center rounded-lg text-xl md:hidden" aria-label="Open menu" aria-expanded={open} onClick={() => setOpen(o => !o)}>{open ? '✕' : '☰'}</button>
