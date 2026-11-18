@@ -32,7 +32,7 @@ app.set('trust proxy', 1);
 
 app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], baseUri: ["'self'"], fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'], styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'], scriptSrc: ["'self'", "'unsafe-inline'"], scriptSrcAttr: ["'unsafe-inline'"], imgSrc: ["'self'", 'data:', 'https:'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], formAction: ["'self'"] } } }));
 // rawBody is kept so payment-webhook signatures can be verified against the exact bytes received
-app.use(express.json({ limit: '32kb', type: 'application/json', verify: (req, res, buf) => { req.rawBody = buf; } }));
+app.use(express.json({ limit: '8mb', type: 'application/json', verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use((req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS' && req.get('origin')) {
     const origin = req.get('origin'); const host = req.get('host');
@@ -264,6 +264,42 @@ async function initDb() {
     // Additive migrations (safe to run on every start, and on databases created by older versions)
     const migrations = `
       ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS location TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT;
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_user_id INT REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS recipient_user_id INT REFERENCES users(id) ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_user_id, created_at DESC);
+      CREATE TABLE IF NOT EXISTS user_settings (
+        user_id INT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        message_popups BOOLEAN NOT NULL DEFAULT TRUE,
+        email_notifications BOOLEAN NOT NULL DEFAULT TRUE,
+        profile_visibility BOOLEAN NOT NULL DEFAULT TRUE,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS id_documents (
+        id BIGSERIAL PRIMARY KEY,
+        user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        document_type VARCHAR(40) NOT NULL,
+        original_name TEXT NOT NULL,
+        mime_type VARCHAR(100) NOT NULL,
+        encrypted_data BYTEA NOT NULL,
+        encryption_iv BYTEA NOT NULL,
+        encryption_tag BYTEA NOT NULL,
+        review_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        review_note TEXT,
+        reviewed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, document_type)
+      );
+      CREATE INDEX IF NOT EXISTS idx_id_documents_review ON id_documents(review_status, created_at DESC);
+      CREATE TABLE IF NOT EXISTS message_reads (
+        message_id INT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY(message_id, user_id)
+      );
       ALTER TABLE users ADD COLUMN IF NOT EXISTS is_suspicious BOOLEAN NOT NULL DEFAULT FALSE;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS is_suspended BOOLEAN NOT NULL DEFAULT FALSE;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP;
@@ -511,7 +547,11 @@ function parseCookies(req) {
 function setSessionCookie(res, token) {
   res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: SESSION_DAYS * 86400000, path: '/' });
 }
-const publicUser = u => ({ id: u.id, name: u.name, email: u.email, accountType: u.account_type, accountStatus: u.account_status, isVerified: !!u.is_verified });
+const publicUser = u => ({
+  id: u.id, name: u.name, email: u.email,
+  phone: u.phone || '', location: u.location || '', bio: u.bio || '',
+  accountType: u.account_type, accountStatus: u.account_status, isVerified: !!u.is_verified
+});
 
 async function loadUser(req) {
   const token = parseCookies(req)[SESSION_COOKIE];
@@ -536,6 +576,83 @@ const requireApproved = (req, res, next) => {
   if (req.user.account_status !== 'approved') return res.status(403).json({ error: 'Your account is awaiting administrator approval.' });
   next();
 };
+
+/* ---------------- profile, preferences and private identity documents ---------------- */
+const ID_TYPES = ['national_id', 'passport', 'drivers_license', 'voters_card', 'other'];
+function identityKey() {
+  const raw = String(process.env.ID_ENCRYPTION_KEY || '').trim();
+  if (!/^[a-f0-9]{64}$/i.test(raw)) fail(503, 'Identity uploads are not configured. Please contact support.');
+  return Buffer.from(raw, 'hex');
+}
+function encryptIdentity(bytes) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', identityKey(), iv);
+  return { data: Buffer.concat([cipher.update(bytes), cipher.final()]), iv, tag: cipher.getAuthTag() };
+}
+function decryptIdentity(row) {
+  const decipher = crypto.createDecipheriv('aes-256-gcm', identityKey(), row.encryption_iv);
+  decipher.setAuthTag(row.encryption_tag);
+  return Buffer.concat([decipher.update(row.encrypted_data), decipher.final()]);
+}
+const safeIdFilename = name => String(name || 'identity-document').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'identity-document';
+function validIdentityFile(type, bytes) {
+  if (type === 'application/pdf') return bytes.length >= 5 && bytes.subarray(0, 5).toString('ascii') === '%PDF-';
+  if (type === 'image/jpeg') return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  if (type === 'image/png') return bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
+  return false;
+}
+app.get('/api/profile', requireUser, wrap(async (req, res) => {
+  await pool.query('INSERT INTO user_settings (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING', [req.user.id]);
+  const u = (await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id])).rows[0];
+  const settings = (await pool.query('SELECT message_popups,email_notifications,profile_visibility FROM user_settings WHERE user_id=$1', [req.user.id])).rows[0];
+  const documents = (await pool.query('SELECT id,document_type,original_name,mime_type,review_status,review_note,created_at FROM id_documents WHERE user_id=$1 ORDER BY created_at DESC', [req.user.id])).rows;
+  res.json({ user: publicUser(u), settings, documents });
+}));
+app.patch('/api/profile', requireUser, wrap(async (req, res) => {
+  const name = str(req.body.name,120), phone = str(req.body.phone,40), location = str(req.body.location,120), bio = str(req.body.bio,1000);
+  if (name.length < 2) fail(400, 'Please enter your full name.');
+  const { rows } = await pool.query('UPDATE users SET name=$1,phone=$2,location=$3,bio=$4 WHERE id=$5 RETURNING *',
+    [name, phone || null, location || null, bio || null, req.user.id]);
+  res.json({ success:true, user:publicUser(rows[0]) });
+}));
+app.patch('/api/profile/settings', requireUser, wrap(async (req, res) => {
+  await pool.query('INSERT INTO user_settings (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING', [req.user.id]);
+  const current=(await pool.query('SELECT * FROM user_settings WHERE user_id=$1',[req.user.id])).rows[0];
+  const next={
+    message_popups:typeof req.body.message_popups==='boolean'?req.body.message_popups:current.message_popups,
+    email_notifications:typeof req.body.email_notifications==='boolean'?req.body.email_notifications:current.email_notifications,
+    profile_visibility:typeof req.body.profile_visibility==='boolean'?req.body.profile_visibility:current.profile_visibility
+  };
+  const {rows}=await pool.query('UPDATE user_settings SET message_popups=$1,email_notifications=$2,profile_visibility=$3,updated_at=NOW() WHERE user_id=$4 RETURNING message_popups,email_notifications,profile_visibility',
+    [next.message_popups,next.email_notifications,next.profile_visibility,req.user.id]);
+  res.json({success:true,settings:rows[0]});
+}));
+app.post('/api/profile/ids', requireUser, wrap(async (req,res)=>{
+  const docType=str(req.body.document_type,40), mime=str(req.body.mime_type,100).toLowerCase();
+  const filename=safeIdFilename(req.body.filename), base64=String(req.body.data_base64||'');
+  if(!ID_TYPES.includes(docType)) fail(400,'Choose a supported identity document type.');
+  if(!['application/pdf','image/jpeg','image/png'].includes(mime)) fail(400,'Upload a PDF, JPG or PNG file.');
+  if(!base64 || base64.length>7*1024*1024 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) fail(400,'The file is empty, invalid or larger than 5 MB.');
+  const bytes=Buffer.from(base64,'base64');
+  if(!bytes.length || bytes.length>5*1024*1024 || bytes.toString('base64').replace(/=+$/,'')!==base64.replace(/=+$/,'')) fail(400,'The file is invalid or larger than 5 MB.');
+  if(!validIdentityFile(mime,bytes)) fail(400,'The file contents do not match the selected PDF, JPG or PNG format.');
+  const encrypted=encryptIdentity(bytes);
+  const {rows}=await pool.query(
+    "INSERT INTO id_documents (user_id,document_type,original_name,mime_type,encrypted_data,encryption_iv,encryption_tag,review_status) VALUES ($1,$2,$3,$4,$5,$6,$7,'pending') " +
+    "ON CONFLICT (user_id,document_type) DO UPDATE SET original_name=EXCLUDED.original_name,mime_type=EXCLUDED.mime_type,encrypted_data=EXCLUDED.encrypted_data,encryption_iv=EXCLUDED.encryption_iv,encryption_tag=EXCLUDED.encryption_tag,review_status='pending',review_note=NULL,reviewed_at=NULL,updated_at=NOW() " +
+    "RETURNING id,document_type,original_name,mime_type,review_status,review_note,created_at",
+    [req.user.id,docType,filename,mime,encrypted.data,encrypted.iv,encrypted.tag]);
+  res.status(201).json({success:true,document:rows[0]});
+}));
+app.delete('/api/profile/ids/:id', requireUser, wrap(async(req,res)=>{
+  const id=toInt(req.params.id); if(!id) fail(400,'Invalid document id.');
+  const deleted=await pool.query('DELETE FROM id_documents WHERE id=$1 AND user_id=$2 RETURNING id',[id,req.user.id]);
+  if(!deleted.rowCount) fail(404,'Document not found.');
+  const approved=await pool.query("SELECT 1 FROM id_documents WHERE user_id=$1 AND review_status='approved' LIMIT 1",[req.user.id]);
+  if(!approved.rowCount) await pool.query('UPDATE users SET is_verified=FALSE WHERE id=$1',[req.user.id]);
+  res.json({success:true});
+}));
+
 
 app.post('/api/auth/register', authLimiter, wrap(async (req, res) => {
   const name = str(req.body.name, 120);
@@ -661,7 +778,9 @@ app.get('/api/health', (req, res) => res.json({ ok: true, version: '2.4.0' }));
 
 app.get('/api/professionals', wrap(async (req, res) => {
   const { role, location, category } = req.query;
-  let query = `SELECT * FROM professionals WHERE status = 'approved' AND is_active = TRUE`;
+  let query = "SELECT * FROM professionals WHERE status = 'approved' AND is_active = TRUE AND NOT EXISTS (" +
+    "SELECT 1 FROM crew_applications ca JOIN users u ON (u.id=ca.user_id OR LOWER(u.email)=LOWER(ca.email)) " +
+    "JOIN user_settings us ON us.user_id=u.id WHERE (ca.professional_id=professionals.id OR professionals.application_id='app-' || ca.id::text) AND us.profile_visibility=FALSE)";
   const params = [];
   if (role) { params.push(String(role)); query += ` AND role = $${params.length}`; }
   if (category) { params.push(String(category)); query += ` AND category = $${params.length}`; }
@@ -864,6 +983,60 @@ const maskContact = text => text
   .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[Masked Email]')
   .replace(/\+?[0-9][0-9\s\-().]{7,}[0-9]/g, '[Masked Phone Number]');
 
+
+/* ---------------- inbox and live account notifications ---------------- */
+const messageNotificationSubs = new Map();
+function emitMessageNotification(userId,payload){
+  if(!userId) return;
+  for(const sub of messageNotificationSubs.get(Number(userId))||[]){
+    try{sub.write('data: '+JSON.stringify(payload)+'\n\n');}catch(e){}
+  }
+}
+async function getOtherParticipantId(db,user,booking){
+  if(ownsBooking(user,booking)){
+    const r=await db.query(
+      "SELECT COALESCE(ca.user_id,(SELECT u.id FROM users u WHERE LOWER(u.email)=LOWER(ca.email) LIMIT 1)) AS user_id " +
+      "FROM crew_applications ca JOIN professionals p ON (ca.professional_id=p.id OR p.application_id='app-' || ca.id::text) " +
+      "WHERE p.id=$1 AND (ca.user_id IS NOT NULL OR ca.email IS NOT NULL) ORDER BY ca.id DESC LIMIT 1",
+      [booking.professional_id]);
+    return r.rows[0]?.user_id?Number(r.rows[0].user_id):null;
+  }
+  const r=await db.query("SELECT id FROM users WHERE id=$1 OR LOWER(email)=LOWER($2) ORDER BY CASE WHEN id=$1 THEN 0 ELSE 1 END LIMIT 1",
+    [booking.user_id,booking.client_email||'']);
+  return r.rows[0]?Number(r.rows[0].id):null;
+}
+app.get('/api/messages/stream',requireUser,(req,res)=>{
+  res.set({'Content-Type':'text/event-stream','Cache-Control':'no-cache, no-transform',Connection:'keep-alive','X-Accel-Buffering':'no'});
+  res.flushHeaders(); res.write('retry: 3000\n\n');
+  const uid=Number(req.user.id);
+  if(!messageNotificationSubs.has(uid)) messageNotificationSubs.set(uid,new Set());
+  const subs=messageNotificationSubs.get(uid); subs.add(res);
+  const ping=setInterval(()=>res.write(': ping\n\n'),25000);
+  req.on('close',()=>{clearInterval(ping);subs.delete(res);if(!subs.size)messageNotificationSubs.delete(uid);});
+});
+app.get('/api/inbox',requireUser,wrap(async(req,res)=>{
+  const uid=Number(req.user.id), email=String(req.user.email||'').trim().toLowerCase();
+  const client="(b.user_id=$1 OR (b.user_id IS NULL AND LOWER(COALESCE(b.client_email,''))=$2))";
+  const crew="EXISTS (SELECT 1 FROM professionals px JOIN crew_applications ca ON (ca.professional_id=px.id OR px.application_id='app-' || ca.id::text) WHERE px.id=b.professional_id AND (ca.user_id=$1 OR (ca.user_id IS NULL AND LOWER(COALESCE(ca.email,''))=$2)))";
+  const role="CASE WHEN "+client+" THEN 'client' ELSE 'crew' END";
+  const {rows}=await pool.query(
+    "SELECT b.id,COALESCE(b.reference,'') AS reference,b.client_name,b.project_type,b.status,b.created_at,p.name AS professional_name,"+role+" AS my_role,"+
+    "(SELECT m.masked_content FROM messages m WHERE m.booking_id=b.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) AS last_message,"+
+    "(SELECT MAX(m.created_at) FROM messages m WHERE m.booking_id=b.id) AS last_message_at,"+
+    "(SELECT COUNT(*)::int FROM messages m WHERE m.booking_id=b.id AND ((m.sender_user_id IS NOT NULL AND m.sender_user_id<>$1) OR (m.sender_user_id IS NULL AND m.sender_type<>CASE WHEN "+client+" THEN 'client' ELSE 'crew' END)) "+
+    "AND NOT EXISTS(SELECT 1 FROM message_reads mr WHERE mr.message_id=m.id AND mr.user_id=$1)) AS unread_count "+
+    "FROM bookings b LEFT JOIN professionals p ON p.id=b.professional_id WHERE "+client+" OR "+crew+
+    " ORDER BY COALESCE((SELECT MAX(m.created_at) FROM messages m WHERE m.booking_id=b.id),b.created_at) DESC LIMIT 100",[uid,email]);
+  res.json({conversations:rows.map(b=>({...b,reference:b.reference||refFor(b.id),unread_count:Number(b.unread_count||0)}))});
+}));
+app.post('/api/inbox/:bookingId/read',requireUser,wrap(async(req,res)=>{
+  const booking=await getAccessibleBooking(pool,req,req.params.bookingId);
+  const ownType=ownsBooking(req.user,booking)?'client':'crew';
+  await pool.query("INSERT INTO message_reads(message_id,user_id) SELECT m.id,$1 FROM messages m WHERE m.booking_id=$2 AND ((m.sender_user_id IS NOT NULL AND m.sender_user_id<>$1) OR (m.sender_user_id IS NULL AND m.sender_type<>$3)) ON CONFLICT(message_id,user_id) DO NOTHING",
+    [req.user.id,booking.id,ownType]);
+  res.json({success:true});
+}));
+
 app.get('/api/bookings/:id/messages', requireUser, wrap(async (req, res) => {
   const b = await getAccessibleBooking(pool, req, req.params.id);
   const { rows } = await pool.query('SELECT * FROM messages WHERE booking_id = $1 ORDER BY created_at ASC', [b.id]);
@@ -887,10 +1060,15 @@ app.post('/api/bookings/:id/messages', requireUser, wrap(async (req, res) => {
   const b = await getAccessibleBooking(pool, req, req.params.id);
   const content = str(req.body.content, 2000);
   if (!content) fail(400, 'Message cannot be empty.');
+  const senderType = ownsBooking(req.user, b) ? 'client' : 'crew';
+  const recipientId = await getOtherParticipantId(pool, req.user, b);
   const { rows } = await pool.query(
-    `INSERT INTO messages (booking_id, sender_type, sender_name, masked_content) VALUES ($1,$2,$3,$4) RETURNING *`,
-    [b.id, ownsBooking(req.user, b) ? 'client' : 'crew', req.user.name, maskContact(content)]);
-  for (const sub of chatSubs.get(b.id) || []) sub.write(`data: ${JSON.stringify(rows[0])}\n\n`);
+    'INSERT INTO messages (booking_id,sender_type,sender_name,masked_content,sender_user_id,recipient_user_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
+    [b.id,senderType,req.user.name,maskContact(content),req.user.id,recipientId]);
+  for (const sub of chatSubs.get(b.id) || []) sub.write('data: '+JSON.stringify(rows[0])+'\n\n');
+  if (recipientId && recipientId !== Number(req.user.id)) {
+    emitMessageNotification(recipientId,{type:'message',booking_id:b.id,reference:b.reference||refFor(b.id),sender_name:req.user.name,preview:rows[0].masked_content,created_at:rows[0].created_at});
+  }
   res.status(201).json(rows[0]);
 }));
 
@@ -989,6 +1167,32 @@ app.patch('/api/admin/users/:id/action', adminGuard, wrap(async (req, res) => {
     return row;
   });
   res.json({ success: true, user: publicUser(user) });
+}));
+
+
+app.get('/api/admin/id-documents', adminGuard, wrap(async(req,res)=>{
+  const {rows}=await pool.query("SELECT d.id,d.user_id,u.name,u.email,d.document_type,d.original_name,d.mime_type,d.review_status,d.review_note,d.created_at FROM id_documents d JOIN users u ON u.id=d.user_id ORDER BY CASE WHEN d.review_status='pending' THEN 0 ELSE 1 END,d.created_at DESC LIMIT 300");
+  res.json({documents:rows});
+}));
+app.get('/api/admin/id-documents/:id/file', adminGuard, wrap(async(req,res)=>{
+  const id=toInt(req.params.id); if(!id) fail(400,'Invalid document id.');
+  const row=(await pool.query('SELECT original_name,mime_type,encrypted_data,encryption_iv,encryption_tag FROM id_documents WHERE id=$1',[id])).rows[0];
+  if(!row) fail(404,'Document not found.');
+  res.set({'Content-Type':row.mime_type,'Content-Disposition':'attachment; filename="'+safeIdFilename(row.original_name)+'"','X-Content-Type-Options':'nosniff','Cache-Control':'no-store'});
+  res.send(decryptIdentity(row));
+}));
+app.patch('/api/admin/id-documents/:id/review', adminGuard, wrap(async(req,res)=>{
+  const id=toInt(req.params.id); if(!id) fail(400,'Invalid document id.');
+  const status=String(req.body.status||''); if(!['approved','rejected'].includes(status)) fail(400,'Choose approved or rejected.');
+  const note=str(req.body.note,1000);
+  await withTx(async db=>{
+    const doc=(await db.query('UPDATE id_documents SET review_status=$1,review_note=$2,reviewed_at=NOW(),updated_at=NOW() WHERE id=$3 RETURNING *',[status,note||null,id])).rows[0];
+    if(!doc) fail(404,'Document not found.');
+    const approved=await db.query("SELECT 1 FROM id_documents WHERE user_id=$1 AND review_status='approved' LIMIT 1",[doc.user_id]);
+    await db.query('UPDATE users SET is_verified=$1 WHERE id=$2',[!!approved.rowCount,doc.user_id]);
+    await audit(db,req,'identity_document_'+status,{id:doc.user_id},{documentId:doc.id,documentType:doc.document_type});
+  });
+  res.json({success:true});
 }));
 
 app.get('/api/admin/audit-log', adminGuard, wrap(async (req, res) => {
