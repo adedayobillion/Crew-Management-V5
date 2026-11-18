@@ -654,6 +654,8 @@ app.post('/api/profile/ids', requireUser, wrap(async (req,res)=>{
     "ON CONFLICT (user_id,document_type) DO UPDATE SET original_name=EXCLUDED.original_name,mime_type=EXCLUDED.mime_type,encrypted_data=EXCLUDED.encrypted_data,encryption_iv=EXCLUDED.encryption_iv,encryption_tag=EXCLUDED.encryption_tag,review_status='pending',review_note=NULL,reviewed_at=NULL,updated_at=NOW() " +
     "RETURNING id,document_type,original_name,mime_type,review_status,review_note,created_at",
     [req.user.id,docType,filename,mime,encrypted.data,encrypted.iv,encrypted.tag]);
+  const stillVerified=await pool.query("SELECT 1 FROM id_documents WHERE user_id=$1 AND review_status='approved' LIMIT 1",[req.user.id]);
+  if(!stillVerified.rowCount) await pool.query('UPDATE users SET is_verified=FALSE WHERE id=$1',[req.user.id]);
   res.status(201).json({success:true,document:rows[0]});
 }));
 app.delete('/api/profile/ids/:id', requireUser, wrap(async(req,res)=>{
