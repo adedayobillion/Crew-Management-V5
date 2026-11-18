@@ -24,7 +24,7 @@ export default function Admin() {
   const [tab, setTab] = useState('accounts'); const [msg, setMsg] = useState({ text: '', err: false });
   const [stats, setStats] = useState(null); const [users, setUsers] = useState(null);
   const [filters, setFilters] = useState({ status: 'all', flag: 'all', q: '' });
-  const [audit, setAudit] = useState(null); const [bookings, setBookings] = useState(null); const [apps, setApps] = useState(null);
+  const [audit, setAudit] = useState(null); const [bookings, setBookings] = useState(null); const [apps, setApps] = useState(null); const [idDocuments, setIdDocuments] = useState(null);
   const [notes, setNotes] = useState({});
   const say = (text, err = false) => setMsg({ text, err });
 
@@ -40,6 +40,27 @@ export default function Admin() {
   const loadAudit = async () => { try { setAudit((await api('/api/admin/audit-log')).events); } catch (e) { say(e.message, true); } };
   const loadBookings = async () => { try { setBookings((await api('/api/admin/bookings')).bookings); } catch (e) { say(e.message, true); } };
   const loadApps = async () => { try { setApps((await api('/api/admin/applications')).applications); } catch (e) { say(e.message, true); } };
+  const loadIdDocuments = async () => { try { setIdDocuments((await api('/api/admin/id-documents')).documents); } catch (e) { say(e.message, true); } };
+  async function downloadIdDocument(id, filename) {
+    try {
+      const r = await fetch('/api/admin/id-documents/' + id + '/file', { headers: { 'x-admin-token': token } });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw Error(d.error || 'Could not retrieve document.'); }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = filename || 'identity-document'; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) { say(e.message, true); }
+  }
+  async function reviewIdDocument(id, status) {
+    const note = prompt(status === 'approved' ? 'Optional verification note:' : 'Reason for rejecting this document:');
+    if (note === null) return;
+    try {
+      await api('/api/admin/id-documents/' + id + '/review', { method: 'PATCH', body: JSON.stringify({ status, note }) });
+      say('Identity document ' + status + '.');
+      await loadIdDocuments();
+      await loadUsers();
+    } catch (e) { say(e.message, true); }
+  }
   const refreshAll = async t => { await Promise.all([loadOverview(t), loadUsers(t)]); say('Dashboard refreshed.'); };
 
   async function login(e) {
@@ -48,7 +69,7 @@ export default function Admin() {
     catch (err) { setLoginErr(err.message === 'Unauthorized' ? 'Token not accepted. Check CMA_ADMIN_TOKEN in Railway.' : err.message); }
   }
   function lock() { setToken(''); setTokenInput(''); setAuthed(false); setStats(null); setUsers(null); }
-  useEffect(() => { if (!authed) return; if (tab === 'audit') loadAudit(); if (tab === 'bookings') loadBookings(); if (tab === 'applications') loadApps(); }, [tab, authed]);
+  useEffect(() => { if (!authed) return; if (tab === 'audit') loadAudit(); if (tab === 'bookings') loadBookings(); if (tab === 'applications') loadApps(); if (tab === 'identity') loadIdDocuments(); }, [tab, authed]);
 
   const labels = { approve: 'approve this account', reject: 'reject this account', verify: 'mark this account verified', unverify: 'remove this verification', flag_suspicious: 'flag this account for suspicious activity', clear_suspicious: 'clear this suspicious-activity flag', suspend: 'suspend this account and revoke its active sessions', reactivate: 'reactivate this account' };
   async function act(id, action) {
@@ -108,7 +129,7 @@ export default function Admin() {
                 ))}
               </div>
             )}
-            <SlidingTabs id="adminTabs" value={tab} onChange={setTab} className="my-4 w-fit max-w-full overflow-x-auto" tabs={[{ value: 'accounts', label: 'Accounts' }, { value: 'audit', label: 'Admin activity log' }, { value: 'bookings', label: 'Bookings' }, { value: 'applications', label: 'Crew applications' }]} />
+            <SlidingTabs id="adminTabs" value={tab} onChange={setTab} className="my-4 w-fit max-w-full overflow-x-auto" tabs={[{ value: 'accounts', label: 'Accounts' }, { value: 'audit', label: 'Admin activity log' }, { value: 'bookings', label: 'Bookings' }, { value: 'applications', label: 'Crew applications' }, { value: 'identity', label: 'ID verification' }]} />
             <AnimatePresence mode="wait">
               <motion.section key={tab} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
                 {tab === 'accounts' && (<>
@@ -155,6 +176,11 @@ export default function Admin() {
                 {tab === 'applications' && (<>
                   <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Crew applications</h2><Act onClick={loadApps}>Refresh</Act></div>
                   <div className={cn(card, 'mt-3 p-0')}>{apps && <Table headers={['Name', 'Email', 'Role', 'Location', 'Portfolio', 'Status', 'Application', 'Actions']} rows={apps.map(a => [a.full_name, a.email, a.role, a.location, a.portfolio_url ? <a className="underline" rel="noopener noreferrer" target="_blank" href={a.portfolio_url}>Open portfolio ↗</a> : '—', a.status, a.bio, <span className="flex gap-1.5"><Act onClick={() => appAct(a.id, 'approved')}>Approve</Act><Act cls={soft} onClick={() => appAct(a.id, 'rejected')}>Reject</Act><Act cls={soft} onClick={() => makeProfile(a.id)}>Create profile</Act></span>])} />}</div>
+                </>)}
+                {tab === 'identity' && (<>
+                  <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Identity document review</h2><Act onClick={loadIdDocuments}>Refresh</Act></div>
+                  <p className="my-2 text-xs text-muted">Identity documents are confidential personal data. Retrieve files only when required for verification.</p>
+                  <div className={cn(card, 'mt-3 p-0')}>{idDocuments && <Table headers={['Account', 'Document', 'Uploaded', 'Status', 'Review note', 'Actions']} rows={idDocuments.map(d => [<>{d.name}<br /><span className="text-muted">{d.email}</span></>, <>{String(d.document_type).replaceAll('_', ' ')}<br /><span className="text-muted">{d.original_name} · {d.mime_type}</span></>, date(d.created_at), <Pill k={d.review_status === 'approved' ? 'approved' : d.review_status === 'rejected' ? 'rejected' : 'pending'}>{d.review_status}</Pill>, d.review_note || '—', <span className="flex flex-wrap gap-1.5"><Act onClick={() => downloadIdDocument(d.id, d.original_name)}>View / download</Act><Act cls={soft} onClick={() => reviewIdDocument(d.id, 'approved')}>Approve</Act><Act cls={soft} onClick={() => reviewIdDocument(d.id, 'rejected')}>Reject</Act></span>])} />}</div>
                 </>)}
               </motion.section>
             </AnimatePresence>
