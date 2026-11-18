@@ -46,11 +46,11 @@ function Shell() {
       let message;
       try { message = JSON.parse(event.data); } catch { return; }
       if (!active) return;
-      if (messagePopupsEnabled) setIncomingMessage(message);
+      if (messagePopupsEnabled && !inboxOpen) setIncomingMessage(message);
       refreshUnread();
     };
     return () => { active = false; stream.close(); };
-  }, [user?.id, messagePopupsEnabled, refreshUnread]);
+  }, [user?.id, messagePopupsEnabled, inboxOpen, refreshUnread]);
 
   useEffect(() => {
     http('/api/professionals').then(({ ok, data }) => {
