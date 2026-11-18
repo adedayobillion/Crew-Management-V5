@@ -451,6 +451,40 @@ async function initDb() {
     `;
     await runSql(repairs);
     await runSql(migrations);
+    // Existing production tables may already have these columns without defaults.
+    // The current application intentionally omits them from inserts, so enforce safe defaults.
+    await runSql(`
+      ALTER TABLE users ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE users ALTER COLUMN is_verified SET DEFAULT FALSE;
+      ALTER TABLE users ALTER COLUMN is_suspicious SET DEFAULT FALSE;
+      ALTER TABLE users ALTER COLUMN is_suspended SET DEFAULT FALSE;
+      ALTER TABLE sessions ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE crew_applications ALTER COLUMN status SET DEFAULT 'pending';
+      ALTER TABLE crew_applications ALTER COLUMN portfolio_url SET DEFAULT '';
+      ALTER TABLE crew_applications ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE professionals ALTER COLUMN active SET DEFAULT TRUE;
+      ALTER TABLE professionals ALTER COLUMN is_active SET DEFAULT TRUE;
+      ALTER TABLE professionals ALTER COLUMN verified SET DEFAULT FALSE;
+      ALTER TABLE professionals ALTER COLUMN status SET DEFAULT 'approved';
+      ALTER TABLE professionals ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE bookings ALTER COLUMN status SET DEFAULT 'pending';
+      ALTER TABLE bookings ALTER COLUMN payment_status SET DEFAULT 'unpaid';
+      ALTER TABLE bookings ALTER COLUMN payout_status SET DEFAULT 'unpaid';
+      ALTER TABLE bookings ALTER COLUMN overtime_agreed SET DEFAULT FALSE;
+      ALTER TABLE bookings ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE messages ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE admin_audit_log ALTER COLUMN actor SET DEFAULT 'admin';
+      ALTER TABLE admin_audit_log ALTER COLUMN details SET DEFAULT '{}'::jsonb;
+      ALTER TABLE admin_audit_log ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE user_settings ALTER COLUMN message_popups SET DEFAULT TRUE;
+      ALTER TABLE user_settings ALTER COLUMN email_notifications SET DEFAULT TRUE;
+      ALTER TABLE user_settings ALTER COLUMN profile_visibility SET DEFAULT TRUE;
+      ALTER TABLE user_settings ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE id_documents ALTER COLUMN review_status SET DEFAULT 'pending';
+      ALTER TABLE id_documents ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE id_documents ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE message_reads ALTER COLUMN read_at SET DEFAULT CURRENT_TIMESTAMP;
+    `);
     for (const [st, firstErr] of failed) {
       try { await client.query(st); }
       catch (err) { console.warn('Migration note (non-fatal):', err.message, '::', st.replace(/\s+/g, ' ').slice(0, 80)); }
