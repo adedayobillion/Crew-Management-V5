@@ -1367,7 +1367,7 @@ app.post('/api/admin/applications/:id/create-profile', adminGuard, wrap(async (r
     const verified = a.user_id ? !!((await db.query('SELECT is_verified FROM users WHERE id = $1', [a.user_id])).rows[0] || {}).is_verified : false;
     const p = (await db.query(
       `INSERT INTO professionals (application_id, name, role, category, location, bio, "desc", description, rate, daily_rate, rate_full_day, rate_half_day, skills, verified, status, credits, active, is_active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$8,$8,$8,$9,$10,$11,'approved','',TRUE,TRUE) RETURNING *`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$8::numeric,$8::numeric,$8::numeric,$9::numeric,$10,$11,'approved','',TRUE,TRUE) RETURNING *`,
       ['app-' + id, a.name || a.full_name, a.role, category, a.location || '', a.bio || '', (a.bio || '').slice(0, 200), dailyRate, Math.round(dailyRate / 2), SKILLS_IS_JSON ? '[]' : [], verified])).rows[0];
     await db.query(`UPDATE crew_applications SET professional_id = $1, status = 'approved' WHERE id = $2`, [p.id, id]);
     await audit(db, req, 'create_profile', { id: a.user_id, name: a.name, email: a.email }, { reference: '#' + id, status: 'profile ' + p.id });
