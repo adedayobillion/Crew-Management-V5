@@ -611,8 +611,20 @@ app.get('/api/profile', requireUser, wrap(async (req, res) => {
 app.patch('/api/profile', requireUser, wrap(async (req, res) => {
   const name = str(req.body.name,120), phone = str(req.body.phone,40), location = str(req.body.location,120), bio = str(req.body.bio,1000);
   if (name.length < 2) fail(400, 'Please enter your full name.');
-  const { rows } = await pool.query('UPDATE users SET name=$1,phone=$2,location=$3,bio=$4 WHERE id=$5 RETURNING *',
-    [name, phone || null, location || null, bio || null, req.user.id]);
+  const { rows } = await withTx(async db => {
+    const updated = await db.query('UPDATE users SET name=$1,phone=$2,location=$3,bio=$4 WHERE id=$5 RETURNING *',
+      [name, phone || null, location || null, bio || null, req.user.id]);
+    // Keep the public crew listing in sync with the account owner’s editable profile.
+    const applications = await db.query(
+      'UPDATE crew_applications SET name=$1, email=$2, location=$3, bio=$4 WHERE user_id=$5 OR (user_id IS NULL AND LOWER(email)=LOWER($2)) RETURNING id, professional_id',
+      [name, updated.rows[0].email, location || null, bio || null, req.user.id]);
+    for (const application of applications.rows) {
+      await db.query(
+        "UPDATE professionals SET name=$1, location=$2, bio=$3, \"desc\"=$4 WHERE id=$5 OR application_id=$6",
+        [name, location || null, bio || null, bio.slice(0,200), application.professional_id, 'app-' + application.id]);
+    }
+    return updated.rows;
+  });
   res.json({ success:true, user:publicUser(rows[0]) });
 }));
 app.patch('/api/profile/settings', requireUser, wrap(async (req, res) => {
