@@ -594,6 +594,14 @@ function decryptIdentity(row) {
   decipher.setAuthTag(row.encryption_tag);
   return Buffer.concat([decipher.update(row.encrypted_data), decipher.final()]);
 }
+async function syncIdentityVerification(db,userId,verified) {
+  await db.query('UPDATE users SET is_verified=$1 WHERE id=$2',[verified,userId]);
+  await db.query(
+    "UPDATE professionals p SET verified=$1 FROM crew_applications ca JOIN users u ON u.id=$2 " +
+    "WHERE (ca.professional_id=p.id OR p.application_id='app-' || ca.id::text) " +
+    "AND (ca.user_id=$2 OR (ca.user_id IS NULL AND LOWER(COALESCE(ca.email,''))=LOWER(u.email)))",
+    [verified,userId]);
+}
 const safeIdFilename = name => String(name || 'identity-document').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'identity-document';
 function validIdentityFile(type, bytes) {
   if (type === 'application/pdf') return bytes.length >= 5 && bytes.subarray(0, 5).toString('ascii') === '%PDF-';
@@ -655,7 +663,7 @@ app.post('/api/profile/ids', requireUser, wrap(async (req,res)=>{
     "RETURNING id,document_type,original_name,mime_type,review_status,review_note,created_at",
     [req.user.id,docType,filename,mime,encrypted.data,encrypted.iv,encrypted.tag]);
   const stillVerified=await pool.query("SELECT 1 FROM id_documents WHERE user_id=$1 AND review_status='approved' LIMIT 1",[req.user.id]);
-  if(!stillVerified.rowCount) await pool.query('UPDATE users SET is_verified=FALSE WHERE id=$1',[req.user.id]);
+  await syncIdentityVerification(pool,req.user.id,!!stillVerified.rowCount);
   res.status(201).json({success:true,document:rows[0]});
 }));
 app.delete('/api/profile/ids/:id', requireUser, wrap(async(req,res)=>{
@@ -663,7 +671,7 @@ app.delete('/api/profile/ids/:id', requireUser, wrap(async(req,res)=>{
   const deleted=await pool.query('DELETE FROM id_documents WHERE id=$1 AND user_id=$2 RETURNING id',[id,req.user.id]);
   if(!deleted.rowCount) fail(404,'Document not found.');
   const approved=await pool.query("SELECT 1 FROM id_documents WHERE user_id=$1 AND review_status='approved' LIMIT 1",[req.user.id]);
-  if(!approved.rowCount) await pool.query('UPDATE users SET is_verified=FALSE WHERE id=$1',[req.user.id]);
+  await syncIdentityVerification(pool,req.user.id,!!approved.rowCount);
   res.json({success:true});
 }));
 
@@ -1203,7 +1211,7 @@ app.patch('/api/admin/id-documents/:id/review', adminGuard, wrap(async(req,res)=
     const doc=(await db.query('UPDATE id_documents SET review_status=$1,review_note=$2,reviewed_at=NOW(),updated_at=NOW() WHERE id=$3 RETURNING *',[status,note||null,id])).rows[0];
     if(!doc) fail(404,'Document not found.');
     const approved=await db.query("SELECT 1 FROM id_documents WHERE user_id=$1 AND review_status='approved' LIMIT 1",[doc.user_id]);
-    await db.query('UPDATE users SET is_verified=$1 WHERE id=$2',[!!approved.rowCount,doc.user_id]);
+    await syncIdentityVerification(db,doc.user_id,!!approved.rowCount);
     await audit(db,req,'identity_document_'+status,{id:doc.user_id},{documentId:doc.id,documentType:doc.document_type});
   });
   res.json({success:true});
