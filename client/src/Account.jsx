@@ -17,7 +17,7 @@ const reviewStyles = {
 };
 const panel = 'rounded-[18px] border border-line bg-white p-5 shadow-[0_8px_30px_#17233708]';
 
-export function ProfilePage({ user, onBack, onUserUpdated }) {
+export function ProfilePage({ user, onBack, onUserUpdated, onSettingsUpdated }) {
   const [profile, setProfile] = useState(null);
   const [settings, setSettings] = useState({ message_popups: true, email_notifications: true, profile_visibility: true });
   const [documents, setDocuments] = useState([]);
@@ -72,6 +72,7 @@ export function ProfilePage({ user, onBack, onUserUpdated }) {
       return;
     }
     setSettings(r.data.settings);
+    onSettingsUpdated?.(r.data.settings);
     setNotice({ text: 'Settings saved.', error: false });
   }
 
