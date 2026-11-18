@@ -3,9 +3,12 @@ import { AnimatePresence, motion } from 'motion/react';
 import CameraArt from './CameraArt.jsx';
 import { AnimatedNumber, Button, Field, Marquee, Reveal, SkeletonCard, SpotlightCard, Tagline, inputCls } from './ui.jsx';
 import { cn, http, naira, postJSON } from './lib.js';
+import { ArrowDownRight, Brush, ArrowLeft, ArrowLeftRight, ArrowUpRight, Camera, Clapperboard, Heart, Lightbulb, Mail, Menu, Mic, Scissors, ShieldCheck, Sparkles, UserRound, X } from 'lucide-react';
 
 export const COVERS = ['linear-gradient(130deg,#263b4b,#607c87)', 'linear-gradient(130deg,#604c4b,#bc8d78)', 'linear-gradient(130deg,#324b40,#91a783)', 'linear-gradient(130deg,#343b58,#8290bb)', 'linear-gradient(130deg,#584c3d,#c4ad7a)', 'linear-gradient(130deg,#43394c,#9b7da8)'];
-export const SYMBOLS = ['◉', '▦', '▶', '✳', '♫', '✦'];
+const S = { size: '1em', strokeWidth: 1.6, 'aria-hidden': true };
+// One icon per category order used by CATEGORIES: Camera, Production, Editing, Lighting, Sound, Creative
+export const SYMBOLS = [<Camera key="c" {...S} />, <Clapperboard key="p" {...S} />, <Scissors key="e" {...S} />, <Lightbulb key="l" {...S} />, <Mic key="s" {...S} />, <Sparkles key="r" {...S} />];
 export const CATEGORIES = ['Camera', 'Production', 'Editing', 'Lighting', 'Sound', 'Creative'];
 
 /* ---------- Nav ---------- */
@@ -45,13 +48,13 @@ export function Nav({ user, onLogin, onLogout, onDashboard, onCrewDashboard, onS
           <div className="flex items-center gap-1.5 sm:gap-2">
             {user && <ModeSwitch user={user} onSwitch={onSwitch} className="max-sm:hidden" />}
             <button type="button" onClick={onMessages} aria-label="Messages" title="Messages" className="relative grid size-9 place-items-center rounded-xl text-lg text-ink transition hover:bg-[#edf1f5]">
-              <span aria-hidden="true">✉</span>
+              <Mail className="size-5" strokeWidth={1.75} aria-hidden="true" />
               {unreadCount > 0 && <span className="absolute -right-0.5 -top-0.5 grid min-w-[17px] place-items-center rounded-full bg-[#d84b4b] px-1 text-[9px] font-extrabold leading-[17px] text-white">{unreadCount > 99 ? '99+' : unreadCount}</span>}
             </button>
-            <button type="button" onClick={onProfile} aria-label="Profile" title="Profile" className="flex h-9 items-center justify-center gap-1.5 rounded-xl px-2 text-sm font-bold text-ink transition hover:bg-[#edf1f5]"><span aria-hidden="true" className="text-lg">◉</span><span className="hidden sm:inline">Profile</span></button>
+            <button type="button" onClick={onProfile} aria-label="Profile" title="Profile" className="flex h-9 items-center justify-center gap-1.5 rounded-xl px-2 text-sm font-bold text-ink transition hover:bg-[#edf1f5]"><UserRound className="size-5" strokeWidth={1.75} aria-hidden="true" /><span className="hidden sm:inline">Profile</span></button>
             <Button size="sm" variant="ghost" onClick={user ? onLogout : onLogin}>{user ? 'Log out' : 'Log in'}</Button>
             <Button size="sm" className="max-[480px]:hidden" onClick={workspace}>{workspaceLabel}</Button>
-            <button className="grid size-9 place-items-center rounded-lg text-xl md:hidden" aria-label="Open menu" aria-expanded={open} onClick={() => setOpen(o => !o)}>{open ? '✕' : '☰'}</button>
+            <button className="grid size-9 place-items-center rounded-lg text-xl md:hidden" aria-label="Open menu" aria-expanded={open} onClick={() => setOpen(o => !o)}>{open ? <X className="size-5" aria-hidden="true" /> : <Menu className="size-5" aria-hidden="true" />}</button>
           </div>
           <AnimatePresence>
             {open && (
@@ -89,8 +92,8 @@ export function Hero({ filters, setFilters, onJoin }) {
           </motion.h1>
           <motion.p {...rise(0.24)} className="max-w-[540px] text-sm leading-relaxed text-[#c5d0db] sm:text-base">Discover production professionals for film, TV, commercials and digital content. Compare skills, request a booking and keep the details organised in one place.</motion.p>
           <motion.div {...rise(0.34)} className="mt-5 flex gap-2.5 max-sm:flex-col sm:mt-6">
-            <a href="#discover" className="max-sm:block"><Button className="max-sm:w-full">Explore professionals ↘</Button></a>
-            <Button variant="ghostLight" onClick={onJoin} className="max-sm:w-full">Join the crew network ↗</Button>
+            <a href="#discover" className="max-sm:block"><Button className="max-sm:w-full">Explore professionals <ArrowDownRight className="size-4" aria-hidden="true" /></Button></a>
+            <Button variant="ghostLight" onClick={onJoin} className="max-sm:w-full">Join the crew network <ArrowUpRight className="size-4" aria-hidden="true" /></Button>
           </motion.div>
         </div>
         <motion.div {...rise(0.2)} role="img" aria-label="Illustration of a film camera and production tools" className="flex min-h-[205px] items-center justify-center sm:min-h-[300px]">
@@ -103,9 +106,9 @@ export function Hero({ filters, setFilters, onJoin }) {
         <Field label="Production category" htmlFor="category"><select id="category" className={inputCls} value={filters.category} onChange={set('category')}><option value="">All categories</option>{[...CATEGORIES, 'Makeup'].map(c => <option key={c}>{c}</option>)}</select></Field>
         <Field label="Location" htmlFor="location"><select id="location" className={inputCls} value={filters.location} onChange={set('location')}><option value="">Any location</option>{['Lagos', 'Abuja', 'Port Harcourt', 'Remote'].map(c => <option key={c}>{c}</option>)}</select></Field>
         <Field label="Sort by" htmlFor="sort" className="col-span-2 md:col-span-1"><select id="sort" className={inputCls} value={filters.sort} onChange={set('sort')}><option value="recommended">Recommended</option><option value="price-low">Price: low to high</option></select></Field>
-        <Button variant="dark" type="submit" className="col-span-2 h-[46px] md:col-span-1">Search ↗</Button>
+        <Button variant="dark" type="submit" className="col-span-2 h-[46px] md:col-span-1">Search <ArrowUpRight className="size-4" aria-hidden="true" /></Button>
       </form>
-      <Reveal className="mt-8 sm:mt-9"><Marquee items={[...CATEGORIES, 'Makeup'].map((c, i) => [SYMBOLS[i % 6], c])} /></Reveal>
+      <Reveal className="mt-8 sm:mt-9"><Marquee items={[...CATEGORIES, 'Makeup'].map((c, i) => [i < 6 ? SYMBOLS[i] : <Brush key="m" {...S} />, c])} /></Reveal>
     </section>
   );
 }
@@ -129,7 +132,7 @@ function ProCard({ p, i, saved, onSave, onBook }) {
           <motion.span className="relative" whileHover={{ scale: 1.25, rotate: -6 }}>{p.symbol}</motion.span>
           <motion.button aria-label={(saved ? 'Remove ' : 'Save ') + p.name} aria-pressed={saved} whileHover={{ scale: 1.12 }} whileTap={{ scale: 0.8 }} onClick={() => onSave(p.id)}
             className="absolute right-3 top-3 grid size-[31px] place-items-center rounded-full bg-white/90 text-[17px] text-ink">
-            <motion.span key={String(saved)} initial={{ scale: 0.4 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 500, damping: 12 }} className={saved ? 'text-[#e5484d]' : ''}>{saved ? '♥' : '♡'}</motion.span>
+            <motion.span key={String(saved)} initial={{ scale: 0.4 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 500, damping: 12 }} className={saved ? 'text-[#e5484d]' : ''}><Heart className="size-[17px]" strokeWidth={2} fill={saved ? 'currentColor' : 'none'} aria-hidden="true" /></motion.span>
           </motion.button>
         </div>
         <div className="relative z-[1] flex flex-1 flex-col p-[15px] sm:p-[17px]">
@@ -211,8 +214,8 @@ export function Trust() {
     <section id="trust" className="mx-auto w-[min(1200px,calc(100%-28px))] py-10 sm:py-14">
       <SectionHead tag="Designed for accountable bookings" title="Keep the relationship on-platform.">Marketplace controls can reduce off-platform circumvention, but no website can eliminate it completely. Clear policies and good service matter too.</SectionHead>
       <div className="grid gap-4 md:grid-cols-2">
-        {card(false, '🛡️', 'Verified profiles & protected contact details', 'Review identity, references and credits. Keep direct contact details private before a booking is confirmed, with reporting and moderation for suspicious activity.', 0)}
-        {card(true, '↔', 'Clear terms, payments and records', 'Use platform booking terms, transparent fees, cancellation rules, completion confirmation and a dispute process. Do not promise escrow or chargeback protection until the payment setup supports it.', 1)}
+        {card(false, <ShieldCheck className="size-6" strokeWidth={1.75} aria-hidden="true" />, 'Verified profiles & protected contact details', 'Review identity, references and credits. Keep direct contact details private before a booking is confirmed, with reporting and moderation for suspicious activity.', 0)}
+        {card(true, <ArrowLeftRight className="size-6" strokeWidth={1.75} aria-hidden="true" />, 'Clear terms, payments and records', 'Use platform booking terms, transparent fees, cancellation rules, completion confirmation and a dispute process. Do not promise escrow or chargeback protection until the payment setup supports it.', 1)}
       </div>
     </section>
   );
@@ -223,7 +226,7 @@ export function Banner({ onJoin }) {
       <Reveal className="relative flex flex-col items-start justify-between gap-5 overflow-hidden rounded-[19px] bg-gradient-to-br from-lime via-[#b6e456] to-[#d6f78e] p-6 sm:flex-row sm:items-center sm:rounded-[22px] sm:p-[35px]">
         <div aria-hidden className="absolute inset-0 animate-aurora" style={{ background: 'radial-gradient(circle at 90% 10%,#fff6,transparent 45%)' }} />
         <div className="relative"><h2 className="max-w-[650px] font-display text-[29px] font-extrabold leading-[1.05] tracking-[-.05em] sm:text-[clamp(27px,3vw,39px)]">Are you a production professional?</h2><p className="mt-2 text-[13px] text-[#536044]">Create a profile and get discovered for relevant paid opportunities.</p></div>
-        <Button variant="dark" onClick={onJoin} className="relative">Apply to join the network ↗</Button>
+        <Button variant="dark" onClick={onJoin} className="relative">Apply to join the network <ArrowUpRight className="size-4" aria-hidden="true" /></Button>
       </Reveal>
     </section>
   );
@@ -296,7 +299,7 @@ export function Dashboard({ onBack, onJoin, openAuth, toast, user, onMessages })
     <motion.section initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mx-auto w-[min(1200px,calc(100%-28px))] pb-16 pt-6">
       <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <div><Tagline>Client workspace</Tagline><h2 className="mt-2 font-display text-[28px] font-extrabold tracking-[-.05em] sm:text-[32px]">My bookings</h2></div>
-        <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={onBack}>← Browse crew</Button><Button onClick={onJoin}>Register as crew</Button></div>
+        <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={onBack}><ArrowLeft className="size-4" aria-hidden="true" />Browse crew</Button><Button onClick={onJoin}>Register as crew</Button></div>
       </div>
       <div className="mb-5 grid grid-cols-2 gap-3.5 sm:grid-cols-3">
         {[['Total booking requests', <AnimatedNumber value={rows?.length || 0} />], ['Awaiting confirmation', <AnimatedNumber value={pending} />], ['Payment status', 'Not connected']].map(([l, v], i) => (
@@ -354,7 +357,7 @@ export function CrewDashboard({ onBack, onJoin, toast, user, onMessages }) {
     <motion.section initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mx-auto w-[min(1200px,calc(100%-28px))] pb-16 pt-6">
       <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <div><Tagline>Crew workspace</Tagline><h2 className="mt-2 font-display text-[28px] font-extrabold tracking-[-.05em] sm:text-[32px]">Booking requests</h2></div>
-        <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={onBack}>← Back to marketplace</Button>{!data?.hasProfile && <Button onClick={onJoin}>{appStatus ? 'Apply again' : 'Join as crew'}</Button>}</div>
+        <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={onBack}><ArrowLeft className="size-4" aria-hidden="true" />Back to marketplace</Button>{!data?.hasProfile && <Button onClick={onJoin}>{appStatus ? 'Apply again' : 'Join as crew'}</Button>}</div>
       </div>
       {error ? <div className="rounded-2xl border border-line bg-white p-7 text-[13px] text-muted">{error} <Button size="sm" variant="ghost" onClick={load}>Try again</Button></div>
         : data === null ? <div className="rounded-2xl border border-line bg-white p-7 text-[13px] text-muted">Loading your crew requests…</div>

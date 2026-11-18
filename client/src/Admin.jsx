@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { AnimatedNumber, Button, SlidingTabs, inputCls } from './ui.jsx';
 import { cn } from './lib.js';
+import { ArrowUpRight } from 'lucide-react';
 
 const date = v => { if (!v) return '—'; const d = new Date(v); return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString(); };
 const pillCls = { approved: 'bg-[#e4f8c7] text-[#365314]', verified: 'bg-[#e4f8c7] text-[#365314]', pending: 'bg-[#fff1d6] text-[#92400e]', suspicious: 'bg-[#fff1d6] text-[#92400e]', rejected: 'bg-[#fee4e2] text-[#b42318]', suspended: 'bg-[#fee4e2] text-[#b42318]', plain: 'bg-[#edf1f5]' };
@@ -104,7 +105,7 @@ export default function Admin() {
     <div className="mx-auto max-w-[1400px] p-4 sm:p-6">
       <header className="sticky top-2.5 z-20 mb-6 flex items-center justify-between gap-4 rounded-[18px] border border-white/80 bg-white/75 px-4 py-3 shadow-[0_10px_36px_#14203314] backdrop-blur-xl">
         <div className="font-display text-xl font-extrabold tracking-[-.04em]">CMA <small className="block text-[11px] tracking-[.08em] text-muted">ADMIN CONTROL CENTRE</small></div>
-        <div className="flex items-center gap-3 text-sm"><a href="/" className="hover:underline">View marketplace ↗</a>{authed && <Button size="sm" variant="dark" onClick={lock}>Lock console</Button>}</div>
+        <div className="flex items-center gap-3 text-sm"><a href="/" className="hover:underline">View marketplace <ArrowUpRight className="size-4" aria-hidden="true" /></a>{authed && <Button size="sm" variant="dark" onClick={lock}>Lock console</Button>}</div>
       </header>
 
       <AnimatePresence mode="wait">
@@ -175,7 +176,7 @@ export default function Admin() {
                 </>)}
                 {tab === 'applications' && (<>
                   <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Crew applications</h2><Act onClick={loadApps}>Refresh</Act></div>
-                  <div className={cn(card, 'mt-3 p-0')}>{apps && <Table headers={['Name', 'Email', 'Role', 'Location', 'Portfolio', 'Status', 'Application', 'Actions']} rows={apps.map(a => [a.full_name, a.email, a.role, a.location, a.portfolio_url ? <a className="underline" rel="noopener noreferrer" target="_blank" href={a.portfolio_url}>Open portfolio ↗</a> : '—', a.status, a.bio, <span className="flex gap-1.5"><Act onClick={() => appAct(a.id, 'approved')}>Approve</Act><Act cls={soft} onClick={() => appAct(a.id, 'rejected')}>Reject</Act><Act cls={soft} onClick={() => makeProfile(a.id)}>Create profile</Act></span>])} />}</div>
+                  <div className={cn(card, 'mt-3 p-0')}>{apps && <Table headers={['Name', 'Email', 'Role', 'Location', 'Portfolio', 'Status', 'Application', 'Actions']} rows={apps.map(a => [a.full_name, a.email, a.role, a.location, a.portfolio_url ? <a className="underline" rel="noopener noreferrer" target="_blank" href={a.portfolio_url}>Open portfolio <ArrowUpRight className="size-4" aria-hidden="true" /></a> : '—', a.status, a.bio, <span className="flex gap-1.5"><Act onClick={() => appAct(a.id, 'approved')}>Approve</Act><Act cls={soft} onClick={() => appAct(a.id, 'rejected')}>Reject</Act><Act cls={soft} onClick={() => makeProfile(a.id)}>Create profile</Act></span>])} />}</div>
                 </>)}
                 {tab === 'identity' && (<>
                   <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Identity document review</h2><Act onClick={loadIdDocuments}>Refresh</Act></div>

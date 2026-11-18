@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Button, Field, Tagline, inputCls } from './ui.jsx';
 import { http, postJSON } from './lib.js';
+import { ArrowLeft } from 'lucide-react';
 
 const documentLabels = {
   national_id: 'National ID',
@@ -122,7 +123,7 @@ export function ProfilePage({ user, onBack, onUserUpdated, onSettingsUpdated }) 
           <h1 className="mt-2 font-display text-3xl font-extrabold tracking-[-.05em]">Your profile</h1>
           <p className="mt-1 text-sm text-muted">Edit your personal information, manage preferences and submit identity documents.</p>
         </div>
-        <Button variant="ghost" onClick={onBack}>← Back to home</Button>
+        <Button variant="ghost" onClick={onBack}><ArrowLeft className="size-4" aria-hidden="true" />Back to home</Button>
       </div>
       {loading ? <div className={panel + ' text-sm text-muted'}>Loading your account…</div> : (
         <div className="grid gap-4 lg:grid-cols-[1fr_.9fr]">
