@@ -780,7 +780,7 @@ app.get('/api/professionals', wrap(async (req, res) => {
   const { role, location, category } = req.query;
   let query = "SELECT * FROM professionals WHERE status = 'approved' AND is_active = TRUE AND NOT EXISTS (" +
     "SELECT 1 FROM crew_applications ca JOIN users u ON (u.id=ca.user_id OR LOWER(u.email)=LOWER(ca.email)) " +
-    "JOIN user_settings us ON us.user_id=u.id WHERE (ca.professional_id=professionals.id OR professionals.application_id='app-' || ca.id::text) AND us.profile_visibility=FALSE)";
+    "LEFT JOIN user_settings us ON us.user_id=u.id WHERE (ca.professional_id=professionals.id OR professionals.application_id='app-' || ca.id::text) AND COALESCE(us.profile_visibility,TRUE)=FALSE)";
   const params = [];
   if (role) { params.push(String(role)); query += ` AND role = $${params.length}`; }
   if (category) { params.push(String(category)); query += ` AND category = $${params.length}`; }
