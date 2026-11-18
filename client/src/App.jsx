@@ -53,13 +53,19 @@ function Shell() {
   }, [user?.id, messagePopupsEnabled, inboxOpen, refreshUnread]);
 
   useEffect(() => {
-    http('/api/professionals').then(({ ok, data }) => {
-      if (!ok) throw 0;
-      setPros((data.professionals || []).map((p, i) => ({ id: Number(p.id), name: p.name, role: p.role, category: p.category, location: p.location, rate: Number(p.rate), credits: p.credits, desc: p.desc, skills: Array.isArray(p.skills) ? p.skills : [], cover: COVERS[i % 6], symbol: SYMBOLS[i % 6] })));
-    }).catch(() => setPros([])).finally(() => setLoading(false));
+    refreshProfessionals().catch(() => setPros([])).finally(() => setLoading(false));
     http('/api/auth/me').then(({ data }) => setUser(data.user || null)).catch(() => setUser(null));
-  }, []);
+  }, [refreshProfessionals]);
 
+  const refreshProfessionals = useCallback(async () => {
+    const r = await http('/api/professionals').catch(() => ({ ok: false, data: {} }));
+    if (!r.ok) return;
+    setPros((r.data.professionals || []).map((p, i) => ({
+      id: Number(p.id), name: p.name, role: p.role, category: p.category,
+      location: p.location, rate: Number(p.rate), credits: p.credits, desc: p.desc,
+      skills: Array.isArray(p.skills) ? p.skills : [], cover: COVERS[i % 6], symbol: SYMBOLS[i % 6]
+    })));
+  }, []);
   const closeAuth = useCallback(() => setAuth(a => ({ ...a, open: false })), []);
   const openAuth = (mode = 'login', next = null, role = null) => setAuth({ open: true, mode, role, next });
   const openInbox = bookingId => {
@@ -130,7 +136,7 @@ function Shell() {
               <Discover pros={pros} loading={loading} filters={filters} setFilters={setFilters} saved={saved} onSave={toggleSave} onBook={openBooking} />
               <How /><Trust /><Banner onJoin={openJoin} />
             </div>
-          ) : page === 'profile' ? <ProfilePage key="profile" user={user} onBack={() => showPage('marketplace')} onUserUpdated={setUser} onSettingsUpdated={settings => setMessagePopupsEnabled(settings.message_popups !== false)} />
+          ) : page === 'profile' ? <ProfilePage key="profile" user={user} onBack={() => showPage('marketplace')} onUserUpdated={profile => { setUser(profile); refreshProfessionals(); }} onSettingsUpdated={settings => { setMessagePopupsEnabled(settings.message_popups !== false); refreshProfessionals(); }} />
           : page === 'crew' ? <CrewDashboard key="c" onBack={() => showPage('marketplace')} onJoin={openJoin} toast={toast} user={user} onMessages={openInbox} />
           : <Dashboard key="d" onBack={() => showPage('marketplace')} onJoin={openJoin} toast={toast} user={user} onMessages={openInbox} />}
         </AnimatePresence>
