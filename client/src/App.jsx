@@ -23,6 +23,16 @@ function Shell() {
   const [incomingMessage, setIncomingMessage] = useState(null);
   const [messagePopupsEnabled, setMessagePopupsEnabled] = useState(true);
 
+  const refreshProfessionals = useCallback(async () => {
+    const r = await http('/api/professionals').catch(() => ({ ok: false, data: {} }));
+    if (!r.ok) return;
+    setPros((r.data.professionals || []).map((p, i) => ({
+      id: Number(p.id), name: p.name, role: p.role, category: p.category,
+      location: p.location, rate: Number(p.rate), credits: p.credits, desc: p.desc,
+      skills: Array.isArray(p.skills) ? p.skills : [], cover: COVERS[i % 6], symbol: SYMBOLS[i % 6]
+    })));
+  }, []);
+
   const refreshUnread = useCallback(async () => {
     if (!user) { setUnreadMessages(0); return; }
     const r = await http('/api/inbox').catch(() => ({ ok: false, data: {} }));
@@ -57,15 +67,6 @@ function Shell() {
     http('/api/auth/me').then(({ data }) => setUser(data.user || null)).catch(() => setUser(null));
   }, [refreshProfessionals]);
 
-  const refreshProfessionals = useCallback(async () => {
-    const r = await http('/api/professionals').catch(() => ({ ok: false, data: {} }));
-    if (!r.ok) return;
-    setPros((r.data.professionals || []).map((p, i) => ({
-      id: Number(p.id), name: p.name, role: p.role, category: p.category,
-      location: p.location, rate: Number(p.rate), credits: p.credits, desc: p.desc,
-      skills: Array.isArray(p.skills) ? p.skills : [], cover: COVERS[i % 6], symbol: SYMBOLS[i % 6]
-    })));
-  }, []);
   const closeAuth = useCallback(() => setAuth(a => ({ ...a, open: false })), []);
   const openAuth = (mode = 'login', next = null, role = null) => setAuth({ open: true, mode, role, next });
   const openInbox = bookingId => {
