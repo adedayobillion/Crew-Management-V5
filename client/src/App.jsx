@@ -130,7 +130,7 @@ function Shell() {
               <Discover pros={pros} loading={loading} filters={filters} setFilters={setFilters} saved={saved} onSave={toggleSave} onBook={openBooking} />
               <How /><Trust /><Banner onJoin={openJoin} />
             </div>
-          ) : page === 'profile' ? <ProfilePage key="profile" user={user} onBack={() => showPage('marketplace')} onUserUpdated={setUser} />
+          ) : page === 'profile' ? <ProfilePage key="profile" user={user} onBack={() => showPage('marketplace')} onUserUpdated={setUser} onSettingsUpdated={settings => setMessagePopupsEnabled(settings.message_popups !== false)} />
           : page === 'crew' ? <CrewDashboard key="c" onBack={() => showPage('marketplace')} onJoin={openJoin} toast={toast} user={user} onMessages={openInbox} />
           : <Dashboard key="d" onBack={() => showPage('marketplace')} onJoin={openJoin} toast={toast} user={user} onMessages={openInbox} />}
         </AnimatePresence>
