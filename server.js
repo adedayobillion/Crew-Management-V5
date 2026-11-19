@@ -287,6 +287,12 @@ async function initDb() {
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'text';
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS offer JSONB;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS daily_rate NUMERIC;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR(10);
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS refund_status VARCHAR(20);
+      ALTER TABLE professionals ALTER COLUMN rating DROP DEFAULT;
+      UPDATE professionals SET rating = NULL WHERE rating = 4.9 AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.professional_id = professionals.id);
       DO $$ BEGIN
         ALTER TABLE bookings ALTER COLUMN project_location DROP NOT NULL;
         ALTER TABLE bookings ALTER COLUMN overtime_terms DROP NOT NULL;
@@ -887,7 +893,7 @@ app.get('/api/health', (req, res) => res.json({ ok: true, version: '2.4.0' }));
 
 app.get('/api/professionals', wrap(async (req, res) => {
   const { role, location, category } = req.query;
-  let query = "SELECT * FROM professionals WHERE status = 'approved' AND is_active = TRUE AND NOT EXISTS (" +
+  let query = "SELECT professionals.*, (SELECT COUNT(*)::int FROM reviews r WHERE r.professional_id = professionals.id) AS review_count FROM professionals WHERE status = 'approved' AND is_active = TRUE AND NOT EXISTS (" +
     "SELECT 1 FROM crew_applications ca JOIN users u ON u.id=ca.user_id " +
     "LEFT JOIN user_settings us ON us.user_id=u.id WHERE (ca.professional_id=professionals.id OR professionals.application_id='app-' || ca.id::text) AND COALESCE(us.profile_visibility,TRUE)=FALSE)";
   const params = [];
@@ -998,28 +1004,75 @@ async function crewUserIdsFor(db, professionalId) {
 function notifyBooking(userIds, b, title, preview) {
   for (const uid of userIds) if (uid) emitMessageNotification(uid, { type: 'booking', booking_id: b.id, reference: b.reference || refFor(b.id), sender_name: title, preview, created_at: new Date().toISOString() });
 }
+// Strict policy. A client may withdraw a request until the crew member confirms it. After that the only way out
+// is through the crew member (who must give a reason; a paid booking is then flagged for a refund) or support.
 app.post('/api/bookings/:id/cancel', requireUser, wrap(async (req, res) => {
   const id = toInt(req.params.id); if (!id) fail(400, 'Invalid booking id.');
-  const booking = await withTx(async db => {
+  const reason = str(req.body && req.body.reason, 1000);
+  const out = await withTx(async db => {
     const b = (await db.query('SELECT * FROM bookings WHERE id = $1 FOR UPDATE', [id])).rows[0];
     if (!b) fail(404, 'Booking not found.');
-    if (!ownsBooking(req.user, b)) fail(403, 'You do not have access to this booking.');
-    if (['cancelled', 'completed', 'refunded'].includes(b.status)) fail(409, 'This booking can no longer be cancelled.');
-    if (b.payment_status === 'paid') fail(409, 'Paid bookings must be cancelled through support so a refund can be arranged.');
-    const upd = await db.query(`UPDATE bookings SET status = 'cancelled' WHERE id = $1 RETURNING *`, [id]);
-    // Only a booking that was confirmed holds a block. Freeing one for a pending/declined request would delete
-    // the block of a different, confirmed booking on the same dates and let the professional be double-booked.
-    if (BLOCKING_STATUSES.includes(b.status)) {
+    if (!(await canAccessBooking(db, req.user, b))) fail(403, 'You do not have access to this booking.');
+    if (['cancelled', 'completed', 'refunded', 'declined', 'expired'].includes(b.status)) fail(409, 'This booking can no longer be cancelled.');
+    const mine = ownsBooking(req.user, b) ? 'client' : 'crew';
+    const holds = BLOCKING_STATUSES.includes(b.status);
+    if (mine === 'client' && holds) fail(409, 'This booking is confirmed. Ask the crew member in the chat to cancel it, or contact support.');
+    if (mine === 'crew' && reason.length < 5) fail(400, 'Please give the client a reason (at least 5 characters).');
+    const refund = b.payment_status === 'paid' ? 'pending' : null;
+    const upd = await db.query(`UPDATE bookings SET status = 'cancelled', cancelled_by = $2, cancel_reason = $3, refund_status = COALESCE($4, refund_status) WHERE id = $1 RETURNING *`, [id, mine, reason || null, refund]);
+    // Only a booking that was confirmed holds a block (see BLOCKING_STATUSES).
+    if (holds) {
       await db.query(
         `DELETE FROM availability_blocks WHERE id = (SELECT id FROM availability_blocks WHERE professional_id = $1 AND start_date = $2 AND end_date = $3 AND reason = 'confirmed booking' LIMIT 1)`,
         [b.professional_id, b.start_date, b.end_date]);
     }
-    return { ...upd.rows[0], _crew: await crewUserIdsFor(db, b.professional_id) };
+    await db.query(`UPDATE messages SET offer = jsonb_set(offer, '{status}', '"superseded"') WHERE booking_id = $1 AND kind IN ('request','offer') AND offer->>'status' = 'pending'`, [id]);
+    const other = mine === 'client' ? (await crewUserIdsFor(db, b.professional_id))[0] : Number(b.user_id);
+    const sys = await insertChatMessage(db, b, req.user, 'system', mine === 'client' ? 'The client withdrew this request.' : 'The crew member cancelled this booking. Reason: ' + reason.replace(/[.\s]+$/, '') + '.' + (refund ? ' A refund will be arranged.' : ''), null, other);
+    return { booking: upd.rows[0], sys, other, mine };
   });
-  const { _crew, ...cancelled } = booking;
-  notifyBooking(_crew, cancelled, 'Booking cancelled', 'The client cancelled ' + (cancelled.reference || refFor(cancelled.id)) + ' (' + fmtRange(cancelled) + ').');
-  res.json({ success: true, booking: cancelled });
+  pushChat(out.booking, out.sys, out.other, req.user);
+  res.json({ success: true, booking: out.booking });
 }));
+
+// The client confirms the job was done. Only then can reviews be left and the crew member be paid out.
+app.post('/api/bookings/:id/complete', requireUser, wrap(async (req, res) => {
+  const out = await withTx(async db => {
+    const b = (await db.query('SELECT * FROM bookings WHERE id = $1 FOR UPDATE', [toInt(req.params.id) || 0])).rows[0];
+    if (!b) fail(404, 'Booking not found.');
+    if (!ownsBooking(req.user, b)) fail(403, 'Only the client can confirm completion.');
+    if (!['confirmed', 'in_progress', 'completion_review'].includes(b.status)) fail(409, 'This booking is not in progress.');
+    if (b.payment_status !== 'paid') fail(409, 'Payment must be completed before the job can be marked complete.');
+    if (String(b.start_date).slice(0, 10) > todayLagos()) fail(409, 'You can confirm completion once the job has started.');
+    const upd = await db.query(`UPDATE bookings SET status = 'completed', completed_at = NOW() WHERE id = $1 RETURNING *`, [b.id]);
+    const other = (await crewUserIdsFor(db, b.professional_id))[0];
+    const sys = await insertChatMessage(db, b, req.user, 'system', 'The client confirmed the job is complete.', null, other);
+    return { booking: upd.rows[0], sys, other };
+  });
+  pushChat(out.booking, out.sys, out.other, req.user);
+  res.json({ success: true, booking: out.booking });
+}));
+
+// Requests nobody answers within 48 hours lapse, so dates are not held hostage and clients are not left waiting.
+const REQUEST_EXPIRY_HOURS = Number(process.env.REQUEST_EXPIRY_HOURS || 48);
+async function expireStaleRequests() {
+  const { rows } = await pool.query(
+    `UPDATE bookings b SET status = 'expired'
+      WHERE b.status IN ('awaiting_review','pending','counter_pending')
+        AND GREATEST(b.created_at, COALESCE((SELECT MAX(m.created_at) FROM messages m WHERE m.booking_id = b.id), b.created_at)) < NOW() - make_interval(hours => $1::int)
+      RETURNING b.*`, [REQUEST_EXPIRY_HOURS]);
+  for (const b of rows) {
+    try {
+      await pool.query(`UPDATE messages SET offer = jsonb_set(offer, '{status}', '"superseded"') WHERE booking_id = $1 AND kind IN ('request','offer') AND offer->>'status' = 'pending'`, [b.id]);
+      const sys = (await pool.query(`INSERT INTO messages (booking_id,sender_type,sender_name,masked_content,kind) VALUES ($1,'system','System',$2,'system') RETURNING *`,
+        [b.id, 'This request expired because nobody answered within ' + REQUEST_EXPIRY_HOURS + ' hours.'])).rows[0];
+      for (const sub of chatSubs.get(b.id) || []) sub.write('data: ' + JSON.stringify(sys) + '\n\n');
+      const people = [Number(b.user_id), ...(await crewUserIdsFor(pool, b.professional_id))];
+      notifyBooking(people, b, 'Request expired', (b.reference || refFor(b.id)) + ' expired with no answer.');
+    } catch (e) { console.warn('expire note:', e.message); }
+  }
+  return rows.length;
+}
 
 /* ---------------- crew response ---------------- */
 app.post('/api/crew/bookings/:id/respond', requireUser, wrap(async (req, res) => {
@@ -1127,15 +1180,22 @@ app.post('/api/disputes', requireUser, wrap(async (req, res) => {
   const b = await getAccessibleBooking(pool, req, req.body.booking_id);
   const reason = str(req.body.reason, 2000);
   if (reason.length < 5) fail(400, 'Please describe the issue (at least 5 characters).');
-  const { rows } = await pool.query(
-    `INSERT INTO disputes (booking_id, raised_by, reason, status) VALUES ($1,$2,$3,'open') RETURNING *`, [b.id, ownsBooking(req.user, b) ? 'client' : 'crew', reason]);
-  res.status(201).json(rows[0]);
+  const mine = ownsBooking(req.user, b) ? 'client' : 'crew';
+  const out = await withTx(async db => {
+    const ins = await db.query(`INSERT INTO disputes (booking_id, raised_by, reason, status) VALUES ($1,$2,$3,'open') RETURNING *`, [b.id, mine, reason]);
+    await db.query(`UPDATE bookings SET status = 'disputed' WHERE id = $1 AND status IN ('confirmed','in_progress','completion_review','completed')`, [b.id]);
+    const other = mine === 'client' ? (await crewUserIdsFor(db, b.professional_id))[0] : Number(b.user_id);
+    const sys = await insertChatMessage(db, b, req.user, 'system', 'A problem was reported on this booking. Support will review it and get in touch.', null, other);
+    return { row: ins.rows[0], sys, other };
+  });
+  pushChat(b, out.sys, out.other, req.user);
+  res.status(201).json(out.row);
 }));
 
 app.post('/api/reviews', requireUser, wrap(async (req, res) => {
   const b = await getAccessibleBooking(pool, req, req.body.booking_id);
   if (!ownsBooking(req.user, b)) fail(403, 'You can only review your own bookings.');
-  if (b.payment_status !== 'paid') fail(400, 'Reviews are only allowed after a completed and paid booking.');
+  if (b.payment_status !== 'paid' || b.status !== 'completed') fail(400, 'You can review a booking once it is paid and you have confirmed the job is complete.');
   const rating = Number(req.body.rating);
   if (!Number.isInteger(rating) || rating < 1 || rating > 5) fail(400, 'Rating must be a whole number from 1 to 5.');
   const row = await withTx(async db => {
@@ -1190,7 +1250,7 @@ app.get('/api/inbox',requireUser,wrap(async(req,res)=>{
   const crew="EXISTS (SELECT 1 FROM professionals px JOIN crew_applications ca ON (ca.professional_id=px.id OR px.application_id='app-' || ca.id::text) WHERE px.id=b.professional_id AND ca.user_id=$1)";
   const role="CASE WHEN "+client+" THEN 'client' ELSE 'crew' END";
   const {rows}=await pool.query(
-    "SELECT b.id,COALESCE(b.reference,'') AS reference,b.client_name,b.project_type,b.status,b.created_at,b.payment_status,b.start_date,b.end_date,b.booking_unit,b.daily_rate,b.client_total,b.crew_net,p.name AS professional_name,"+role+" AS my_role,"+
+    "SELECT b.id,COALESCE(b.reference,'') AS reference,b.client_name,b.project_type,b.status,b.created_at,b.payment_status,b.start_date,b.end_date,b.booking_unit,b.daily_rate,b.client_total,b.crew_net,b.cancel_reason,b.cancelled_by,(SELECT COUNT(*)::int FROM reviews rv WHERE rv.booking_id=b.id) AS review_count,p.name AS professional_name,"+role+" AS my_role,"+
     "(SELECT m.masked_content FROM messages m WHERE m.booking_id=b.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) AS last_message,"+
     "(SELECT MAX(m.created_at) FROM messages m WHERE m.booking_id=b.id) AS last_message_at,"+
     "(SELECT COUNT(*)::int FROM messages m WHERE m.booking_id=b.id AND ((m.sender_user_id IS NOT NULL AND m.sender_user_id<>$1) OR (m.sender_user_id IS NULL AND m.sender_type<>CASE WHEN "+client+" THEN 'client' ELSE 'crew' END)) "+
@@ -1458,7 +1518,7 @@ async function findBookingByRef(db, ref) {
   if (!rows[0]) fail(404, 'Booking not found.');
   return rows[0];
 }
-const BOOKING_STATUSES = ['pending', 'awaiting_review', 'awaiting_terms', 'counter_pending', 'declined', 'confirmed', 'in_progress', 'completion_review', 'completed', 'disputed', 'cancelled', 'refunded'];
+const BOOKING_STATUSES = ['expired', 'pending', 'awaiting_review', 'awaiting_terms', 'counter_pending', 'declined', 'confirmed', 'in_progress', 'completion_review', 'completed', 'disputed', 'cancelled', 'refunded'];
 app.patch('/api/admin/bookings/:ref/status', adminGuard, wrap(async (req, res) => {
   const status = String(req.body.status || '').trim();
   if (!BOOKING_STATUSES.includes(status)) fail(400, 'Status must be one of: ' + BOOKING_STATUSES.join(', ') + '.');
@@ -1573,6 +1633,8 @@ app.use((err, req, res, next) => {
 
 initDb().then(() => {
   const server = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  setTimeout(() => expireStaleRequests().catch(e => console.warn('expiry:', e.message)), 30000).unref?.();
+  setInterval(() => expireStaleRequests().catch(e => console.warn('expiry:', e.message)), 30 * 60 * 1000).unref?.();
   setInterval(() => pool.query('DELETE FROM sessions WHERE expires_at < NOW()').catch(() => {}), 6 * 3600 * 1000).unref();
   const shutdown = () => server.close(() => pool.end().finally(() => process.exit(0)));
   process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);

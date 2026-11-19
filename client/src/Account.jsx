@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Button, Field, Tagline, inputCls } from './ui.jsx';
 import { http, naira, postJSON } from './lib.js';
 import { ProposalFields } from './modals.jsx';
-import { ArrowLeft, CalendarClock, Check, X } from 'lucide-react';
+import { ArrowLeft, CalendarClock, Check, FileText, Star, X } from 'lucide-react';
 
 const documentLabels = {
   national_id: 'National ID',
@@ -213,6 +213,24 @@ const OPEN_STATES = ['awaiting_review', 'pending', 'counter_pending', 'confirmed
 const day = d => String(d).slice(0, 10);
 const statusStyle = { pending: 'bg-[#fff1d7] text-[#8b5c09]', accepted: 'bg-[#e3f4d3] text-[#3f6b12]', declined: 'bg-[#fde4e4] text-[#9b2c2c]', superseded: 'bg-[#eef1f4] text-[#64748b]' };
 
+function ActionBar({ thread, busy, panel, setPanel, onComplete, onInvoice }) {
+  const role = thread.my_role, st = thread.status, paid = thread.payment_status === 'paid';
+  const started = day(thread.start_date) <= new Date(Date.now() + 3600000).toISOString().slice(0, 10);
+  const items = [];
+  if (role === 'client' && ['awaiting_review', 'pending', 'counter_pending'].includes(st)) items.push(['Withdraw request', () => setPanel('cancel'), 'cancel']);
+  if (role === 'crew' && OPEN_STATES.includes(st)) items.push(['Cancel booking', () => setPanel('cancel'), 'cancel']);
+  if (role === 'client' && paid && ['confirmed', 'in_progress', 'completion_review'].includes(st) && started) items.push(['Job is done', onComplete, null, true]);
+  if (['confirmed', 'in_progress', 'completed'].includes(st)) items.push(['Report a problem', () => setPanel('dispute'), 'dispute']);
+  if (role === 'client' && st === 'completed' && paid && !Number(thread.review_count)) items.push(['Leave a review', () => setPanel('review'), 'review', true]);
+  if (paid) items.push(['Invoice', onInvoice, 'invoice']);
+  if (!items.length) return null;
+  return (
+    <div className="flex flex-wrap gap-2 border-t border-line bg-[#fafbfa] px-4 py-2">
+      {items.map(([label, fn, key, primary]) => <Button key={label} size="sm" variant={primary ? 'primary' : 'ghost'} disabled={busy} aria-pressed={key ? panel === key : undefined} onClick={fn}>{key === 'invoice' && <FileText className="size-4" aria-hidden="true" />}{label}</Button>)}
+    </div>
+  );
+}
+
 function OfferCard({ message, thread, busy, onRespond }) {
   const o = message.offer || {};
   const mineRole = thread.my_role;
@@ -252,6 +270,10 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [propose, setPropose] = useState(null);
+  const [panel, setPanel] = useState(null); // 'cancel' | 'dispute' | 'review' | 'invoice'
+  const [reason, setReason] = useState('');
+  const [stars, setStars] = useState(5);
+  const [invoice, setInvoice] = useState(null);
   const [note, setNote] = useState('');
   const current = selected ? (threads.find(t => Number(t.id) === Number(selected.id)) || selected) : null;
 
@@ -326,6 +348,31 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
     setPropose(null); setNote('');
     await loadThreads();
   }
+  async function refreshThread() {
+    const fresh = await http('/api/bookings/' + current.id + '/messages').catch(() => ({ ok: false, data: [] }));
+    if (fresh.ok) setMessages(fresh.data || []);
+    await loadThreads();
+  }
+  async function runAction(request) {
+    if (!current || busy) return;
+    setBusy(true); setError('');
+    const r = await request().catch(() => ({ ok: false, data: {} }));
+    setBusy(false);
+    if (!r.ok) { setError(r.data.error || 'That did not work. Please try again.'); return false; }
+    setPanel(null); setReason(''); setStars(5);
+    await refreshThread();
+    return true;
+  }
+  const cancelBooking = () => runAction(() => postJSON('/api/bookings/' + current.id + '/cancel', { reason }));
+  const markComplete = () => window.confirm('Confirm the job was done? This lets the crew member be paid and lets you leave a review.') && runAction(() => postJSON('/api/bookings/' + current.id + '/complete', {}));
+  const reportProblem = () => runAction(() => postJSON('/api/disputes', { booking_id: current.id, reason }));
+  const sendReview = () => runAction(() => postJSON('/api/reviews', { booking_id: current.id, rating: stars, comment: reason }));
+  async function showInvoice() {
+    setError('');
+    const r = await http('/api/invoices/' + current.id).catch(() => ({ ok: false, data: {} }));
+    if (!r.ok) { setError(r.data.error || 'No invoice yet. It is created once payment is confirmed.'); return; }
+    setInvoice(r.data); setPanel('invoice');
+  }
   async function respondToOffer(messageId, response) {
     if (!current || busy) return;
     setBusy(true); setError('');
@@ -391,6 +438,25 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                       })}
                       {!messages.length && <p className="p-4 text-center text-xs text-muted">No messages yet. Start the conversation.</p>}
                     </div>
+                    <ActionBar thread={current} busy={busy} panel={panel} setPanel={setPanel} onComplete={markComplete} onInvoice={showInvoice} />
+                    {panel && panel !== 'invoice' && (
+                      <form onSubmit={e => { e.preventDefault(); ({ cancel: cancelBooking, dispute: reportProblem, review: sendReview })[panel](); }} className="grid gap-2.5 border-t border-line bg-white p-3.5">
+                        <div className="flex items-center justify-between"><strong className="text-sm">{{ cancel: current.my_role === 'crew' ? 'Cancel this booking' : 'Withdraw this request', dispute: 'Report a problem', review: 'Leave a review' }[panel]}</strong><button type="button" className="text-xs text-muted underline" onClick={() => setPanel(null)}>Close</button></div>
+                        {panel === 'review' && <div role="radiogroup" aria-label="Rating" className="flex gap-1">{[1, 2, 3, 4, 5].map(n => <button key={n} type="button" role="radio" aria-checked={stars === n} aria-label={n + ' star' + (n > 1 ? 's' : '')} onClick={() => setStars(n)}><Star className={'size-6 ' + (n <= stars ? 'fill-[#f5b301] text-[#f5b301]' : 'text-line')} aria-hidden="true" /></button>)}</div>}
+                        {(panel !== 'cancel' || current.my_role === 'crew') && <textarea className={inputCls + ' min-h-20'} value={reason} maxLength={1000} onChange={e => setReason(e.target.value)} required={panel !== 'review'} placeholder={panel === 'cancel' ? 'Tell the client why (they will see this)' : panel === 'dispute' ? 'What went wrong? Support will review it.' : 'Optional: how was it?'} />}
+                        <Button type="submit" variant={panel === 'review' ? 'primary' : 'dark'} disabled={busy}>{busy ? 'Please wait…' : { cancel: current.my_role === 'crew' ? 'Cancel booking' : 'Withdraw request', dispute: 'Send report', review: 'Post review' }[panel]}</Button>
+                      </form>
+                    )}
+                    {panel === 'invoice' && invoice && (
+                      <div className="grid gap-1.5 border-t border-line bg-white p-3.5 text-xs">
+                        <div className="flex items-center justify-between"><strong className="text-sm">Invoice {invoice.invoice_number}</strong><button type="button" className="text-xs text-muted underline" onClick={() => setPanel(null)}>Close</button></div>
+                        <div className="flex justify-between"><span className="text-muted">Subtotal</span><span>{naira(invoice.subtotal)}</span></div>
+                        <div className="flex justify-between"><span className="text-muted">VAT ({Number(invoice.vat_rate)}%)</span><span>{naira(invoice.vat_amount)}</span></div>
+                        <div className="flex justify-between font-extrabold"><span>Total</span><span>{naira(invoice.total_amount)}</span></div>
+                        {invoice.supplier_tin && <div className="text-muted">Supplier TIN: {invoice.supplier_tin}</div>}
+                        <button type="button" className="w-fit text-xs font-bold underline" onClick={() => window.print()}>Print</button>
+                      </div>
+                    )}
                     {propose && (
                       <form onSubmit={sendProposal} className="grid gap-3 border-t border-line bg-white p-3.5">
                         <div className="flex items-center justify-between"><strong className="text-sm">Propose a change</strong><button type="button" className="text-xs text-muted underline" onClick={() => setPropose(null)}>Cancel</button></div>
