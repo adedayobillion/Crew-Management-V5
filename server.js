@@ -1828,7 +1828,7 @@ app.post('/api/crew-applications', requireUser, requireVerifiedEmail, wrap(async
     const emptySkills = SKILLS_IS_JSON ? '[]' : [];
     const professional = (await db.query(
       `INSERT INTO professionals (application_id,name,role,category,location,bio,"desc",description,showreel,rate,daily_rate,rate_full_day,rate_half_day,skills,verified,status,credits,active,is_active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$7,$9,$10::numeric,$10::numeric,$10::numeric,$11::numeric,$12::${skillsCast},TRUE,'approved','',TRUE,TRUE)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$8,$9::numeric,$9::numeric,$9::numeric,$10::numeric,$11::${skillsCast},TRUE,'approved','',TRUE,TRUE)
        RETURNING *`,
       ['app-' + application.id, req.user.name, role, category, location, bio, bio.slice(0,200), portfolio || null, dailyRate, Math.round(dailyRate / 2), emptySkills])).rows[0];
     await db.query('UPDATE crew_applications SET professional_id = $1 WHERE id = $2', [professional.id, application.id]);
@@ -1976,7 +1976,7 @@ app.get('/api/admin/listings', adminGuard, wrap(async (req, res) => {
 app.delete('/api/admin/listings/:id', adminGuard, wrap(async (req, res) => {
   const id = toInt(req.params.id); if (!id) fail(400, 'Invalid listing id.');
   await withTx(async db => {
-    const p = (await db.query('SELECT p.id,ca.user_id,p.name,p.role FROM professionals p LEFT JOIN crew_applications ca ON p.application_id = 'app-' || ca.id::text WHERE p.id = $1 FOR UPDATE OF p', [id])).rows[0];
+    const p = (await db.query(`SELECT p.id,ca.user_id,p.name,p.role FROM professionals p LEFT JOIN crew_applications ca ON p.application_id = 'app-' || ca.id::text WHERE p.id = $1 FOR UPDATE OF p`, [id])).rows[0];
     if (!p) fail(404, 'Listing not found.');
     // Keep the record and booking history, but remove it from all public marketplace queries.
     await db.query("UPDATE professionals SET status = 'removed', active = FALSE, is_active = FALSE WHERE id = $1", [id]);
