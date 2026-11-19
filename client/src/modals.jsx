@@ -145,7 +145,7 @@ export function BookingModal({ pro, user, onClose, onSent, onNeedAuth }) {
 
 /* ================= Join ================= */
 const blankJoin = { role: '', location: '', portfolio: '', bio: '' };
-export function JoinModal({ open, user, onClose, onDone, onNeedAuth }) {
+export function JoinModal({ open, user, onClose, onDone, onNeedAuth, onNeedProfile }) {
   const [f, setF] = useState(blankJoin); const [busy, setBusy] = useState(false); const toast = useToast();
   useEffect(() => { if (open) setF(blankJoin); }, [open]);
   const set = k => e => setF(s => ({ ...s, [k]: e.target.value }));
@@ -160,6 +160,13 @@ export function JoinModal({ open, user, onClose, onDone, onNeedAuth }) {
   return (
     <Modal open={open} onClose={onClose} labelledBy="joinTitle">
       <ModalHead tag="Crew application" id="joinTitle" title="Join the crew network" onClose={onClose} />
+      {!user?.isVerified && (
+        <div role="alert" className="mb-4 rounded-xl border border-[#ead7a5] bg-[#fff8e6] p-4 text-sm text-[#72530b]">
+          <strong className="block">Identity verification required</strong>
+          <p className="mt-1">Please upload your identity document in your Profile for verification before applying as a crew member. You can submit your application once an administrator approves your document.</p>
+          <Button type="button" variant="dark" className="mt-3" onClick={onNeedProfile}>Go to Profile</Button>
+        </div>
+      )}
       <form onSubmit={submit}>
         <div className="grid gap-3.5 sm:grid-cols-2">
           <Field label="Full name *" htmlFor="crewName"><input id="crewName" className={inputCls} readOnly value={user?.name || ''} /></Field>
@@ -170,7 +177,7 @@ export function JoinModal({ open, user, onClose, onDone, onNeedAuth }) {
           <Field label="Skills and experience *" htmlFor="crewBio" full><textarea id="crewBio" required className={inputCls + ' min-h-24'} value={f.bio} onChange={set('bio')} placeholder="Summarise your experience, credits and skills." /></Field>
         </div>
         <p className="my-3 text-[11px] text-muted">Submitting this form creates an application for review; it does not automatically publish a profile or guarantee work.</p>
-        <Button variant="dark" type="submit" disabled={busy} className="w-full">{busy ? 'Submitting…' : <>Prepare crew application <ArrowUpRight className="size-4" aria-hidden="true" /></>}</Button>
+        <Button variant="dark" type="submit" disabled={busy || !user?.isVerified} className="w-full">{busy ? 'Submitting…' : <>Prepare crew application <ArrowUpRight className="size-4" aria-hidden="true" /></>}</Button>
       </form>
     </Modal>
   );
