@@ -345,10 +345,10 @@ export function CrewDashboard({ onBack, onJoin, toast, user, onMessages }) {
         : data === null ? <div className="rounded-2xl border border-line bg-white p-7 text-[13px] text-muted">Loading your crew requests…</div>
         : !data.hasProfile ? (
           <div className="rounded-2xl border border-line bg-white p-7 text-[13px] text-muted">
-            <strong className="block text-base text-ink">{appStatus === 'pending' ? 'Your application is under review' : appStatus === 'rejected' ? 'Your last application was not approved' : 'You do not have a crew profile yet'}</strong>
-            <p className="mt-1.5">{appStatus === 'pending' ? 'Once an administrator approves it and creates your profile, clients will be able to book you and requests will appear here.' : 'Apply to the crew network to be listed on the marketplace. You keep the same login and can switch back to hiring any time.'}</p>
-            {appStatus !== 'pending' && <Button className="mt-4" onClick={onJoin}>Apply as crew</Button>}
+            <strong className="block text-base text-ink">{appStatus === 'pending' ? 'Your application is under review' : appStatus === 'rejected' ? 'Your last application was not approved' : 'Create your first crew listing'}</strong>
+            <p className="mt-1.5">Your account is ready for crew listings. Add your role, category, rate and portfolio below. Once identity verification is complete, your listing will be published automatically.</p>
           </div>
+          <CrewListing toast={toast} />
         ) : (<>
           <div className="mb-5 grid grid-cols-2 gap-3.5 sm:grid-cols-3">
             {[['Total requests', rows.length], ['Waiting for your reply', waiting.length]].map(([l, v], i) => (
