@@ -1169,7 +1169,7 @@ app.post('/api/crew/availability', requireUser, wrap(async (req, res) => {
   if (end < start) fail(400, 'The end date cannot be before the start date.');
   if ((new Date(end) - new Date(start)) / 86400000 > 365) fail(400, 'Block at most one year at a time.');
   const row = await withTx(async db => {
-    const p = await myListing(db, req.user);
+    const p = await myListing(db, req.user, req.body.professional_id);
     await db.query('SELECT id FROM professionals WHERE id = $1 FOR UPDATE', [p.id]); // serialise with new bookings
     if ((await db.query(`SELECT COUNT(*)::int AS n FROM availability_blocks WHERE professional_id = $1 AND reason = 'personal' AND end_date >= $2::date`, [p.id, todayLagos()])).rows[0].n >= 100) fail(400, 'You have too many blocked periods. Remove some first.');
     if ((await db.query(`SELECT 1 FROM availability_blocks WHERE professional_id = $1 AND reason <> 'personal' AND NOT (end_date < $2::date OR start_date > $3::date) LIMIT 1`, [p.id, start, end])).rowCount) fail(409, 'You already have a confirmed booking on some of these dates.');
@@ -1179,8 +1179,8 @@ app.post('/api/crew/availability', requireUser, wrap(async (req, res) => {
 }));
 app.delete('/api/crew/availability/:id', requireUser, wrap(async (req, res) => {
   const id = toInt(req.params.id); if (!id) fail(400, 'Invalid id.');
-  const p = await myListing(pool, req.user);
-  const d = await pool.query(`DELETE FROM availability_blocks WHERE id = $1 AND professional_id = $2 AND reason = 'personal' RETURNING id`, [id, p.id]);
+  const ownedIds = await crewProfessionalIds(pool, req.user);
+  const d = await pool.query(`DELETE FROM availability_blocks WHERE id = $1 AND professional_id = ANY($2::int[]) AND reason = 'personal' RETURNING id`, [id, ownedIds]);
   if (!d.rowCount) fail(404, 'Blocked period not found. Dates held by bookings cannot be removed here.');
   res.json({ success: true });
 }));
