@@ -140,7 +140,8 @@ function ProCard({ p, i, saved, onSave, onBook }) {
           <h3 className="font-display text-[17px] font-extrabold tracking-[-.03em]">{p.name}</h3>
           <div className="my-1.5 mb-3 text-xs text-muted">{p.role} · {p.location}</div>
           <p className="mb-3.5 min-h-[38px] text-[13px] leading-relaxed text-[#566274] sm:text-xs">{p.desc}</p>
-          <div className="mb-4 flex flex-wrap gap-1.5">{p.skills.map(s => <span key={s} className="rounded-md bg-[#f0f3f4] px-2 py-1 text-[10px] text-[#566274] transition-colors group-hover/spot:bg-[#edf5da] group-hover/spot:text-[#3e5a14]">{s}</span>)}</div>
+          <div className="mb-3 flex flex-wrap gap-1.5">{p.skills.map(s => <span key={s} className="rounded-md bg-[#f0f3f4] px-2 py-1 text-[10px] text-[#566274] transition-colors group-hover/spot:bg-[#edf5da] group-hover/spot:text-[#3e5a14]">{s}</span>)}</div>
+          {p.showreel && <a href={p.showreel} target="_blank" rel="noopener noreferrer" className="mb-3 inline-flex w-fit items-center gap-1.5 text-xs font-extrabold text-[#5f7f22] underline underline-offset-4">View portfolio <ArrowUpRight className="size-3.5" aria-hidden="true" /></a>}
           <div className="mt-auto flex items-center justify-between gap-2.5 border-t border-[#edf0f1] pt-3.5">
             <div><strong className="font-display text-lg tracking-[-.04em] sm:text-[19px]">{naira(p.rate)}</strong><small className="block text-[10px] text-muted">indicative / day · {p.credits}{p.reviewCount > 0 && p.rating != null ? ' · ★ ' + p.rating.toFixed(1) + ' (' + p.reviewCount + ')' : ''}</small></div>
             <Button size="sm" variant="dark" onClick={() => onBook(p)}>Request booking</Button>
