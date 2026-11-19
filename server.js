@@ -1659,6 +1659,15 @@ app.post('/api/team-bookings', requireUser, requireApproved, wrap(async (req, re
 
 /* ---------------- crew applications ---------------- */
 app.post('/api/crew-applications', requireUser, requireApproved, requireVerifiedEmail, wrap(async (req, res) => {
+  // Identity verification is required before a crew application can be submitted.
+  // Check the database rather than trusting a possibly stale client-side user object.
+  const identity = await pool.query('SELECT is_verified FROM users WHERE id = $1', [req.user.id]);
+  if (!identity.rows[0]?.is_verified) {
+    return res.status(403).json({
+      error: 'Please upload your identity document in your Profile for verification before applying as a crew member. Your application can be submitted once an administrator approves it.',
+      code: 'identity_verification_required'
+    });
+  }
   const role = str(req.body.role, 120);
   const location = str(req.body.location, 120);
   let portfolio = str(req.body.portfolio, 500);
