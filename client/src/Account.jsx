@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Button, Field, Tagline, inputCls } from './ui.jsx';
 import { http, naira, postJSON } from './lib.js';
 import { ProposalFields } from './modals.jsx';
-import { ArrowLeft, CalendarClock, Check, FileText, Star, X } from 'lucide-react';
+import { ArrowLeft, CalendarClock, Check, CreditCard, FileText, Star, X } from 'lucide-react';
 
 const documentLabels = {
   national_id: 'National ID',
@@ -213,12 +213,13 @@ const OPEN_STATES = ['awaiting_review', 'pending', 'counter_pending', 'confirmed
 const day = d => String(d).slice(0, 10);
 const statusStyle = { pending: 'bg-[#fff1d7] text-[#8b5c09]', accepted: 'bg-[#e3f4d3] text-[#3f6b12]', declined: 'bg-[#fde4e4] text-[#9b2c2c]', superseded: 'bg-[#eef1f4] text-[#64748b]' };
 
-function ActionBar({ thread, busy, panel, setPanel, onComplete, onInvoice }) {
+function ActionBar({ thread, busy, panel, setPanel, onComplete, onInvoice, onPay }) {
   const role = thread.my_role, st = thread.status, paid = thread.payment_status === 'paid';
   const started = day(thread.start_date) <= new Date(Date.now() + 3600000).toISOString().slice(0, 10);
   const items = [];
   if (role === 'client' && ['awaiting_review', 'pending', 'counter_pending'].includes(st)) items.push(['Withdraw request', () => setPanel('cancel'), 'cancel']);
   if (role === 'crew' && OPEN_STATES.includes(st)) items.push(['Cancel booking', () => setPanel('cancel'), 'cancel']);
+  if (role === 'client' && !paid && thread.payment_status !== 'refunded' && ['confirmed', 'in_progress'].includes(st)) items.push(['Pay now ' + naira(thread.client_total), onPay, 'pay', true]);
   if (role === 'client' && paid && ['confirmed', 'in_progress', 'completion_review'].includes(st) && started) items.push(['Job is done', onComplete, null, true]);
   if (['confirmed', 'in_progress', 'completed'].includes(st)) items.push(['Report a problem', () => setPanel('dispute'), 'dispute']);
   if (role === 'client' && st === 'completed' && paid && !Number(thread.review_count)) items.push(['Leave a review', () => setPanel('review'), 'review', true]);
@@ -226,7 +227,7 @@ function ActionBar({ thread, busy, panel, setPanel, onComplete, onInvoice }) {
   if (!items.length) return null;
   return (
     <div className="flex flex-wrap gap-2 border-t border-line bg-[#fafbfa] px-4 py-2">
-      {items.map(([label, fn, key, primary]) => <Button key={label} size="sm" variant={primary ? 'primary' : 'ghost'} disabled={busy} aria-pressed={key ? panel === key : undefined} onClick={fn}>{key === 'invoice' && <FileText className="size-4" aria-hidden="true" />}{label}</Button>)}
+      {items.map(([label, fn, key, primary]) => <Button key={label} size="sm" variant={primary ? 'primary' : 'ghost'} disabled={busy} aria-pressed={key ? panel === key : undefined} onClick={fn}>{key === 'invoice' && <FileText className="size-4" aria-hidden="true" />}{key === 'pay' && <CreditCard className="size-4" aria-hidden="true" />}{label}</Button>)}
     </div>
   );
 }
@@ -365,6 +366,14 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
   }
   const cancelBooking = () => runAction(() => postJSON('/api/bookings/' + current.id + '/cancel', { reason }));
   const markComplete = () => window.confirm('Confirm the job was done? This lets the crew member be paid and lets you leave a review.') && runAction(() => postJSON('/api/bookings/' + current.id + '/complete', {}));
+  async function payNow() {
+    if (busy) return;
+    setBusy(true); setError('');
+    const r = await postJSON('/api/payments/initialize', { booking_id: current.id }).catch(() => ({ ok: false, data: {} }));
+    if (r.ok && r.data.checkout_url) { window.location.assign(r.data.checkout_url); return; }
+    setError(r.data.error || 'Could not start the payment. Please try again.');
+    setBusy(false);
+  }
   const reportProblem = () => runAction(() => postJSON('/api/disputes', { booking_id: current.id, reason }));
   const sendReview = () => runAction(() => postJSON('/api/reviews', { booking_id: current.id, rating: stars, comment: reason }));
   async function showInvoice() {
@@ -438,7 +447,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                       })}
                       {!messages.length && <p className="p-4 text-center text-xs text-muted">No messages yet. Start the conversation.</p>}
                     </div>
-                    <ActionBar thread={current} busy={busy} panel={panel} setPanel={setPanel} onComplete={markComplete} onInvoice={showInvoice} />
+                    <ActionBar thread={current} busy={busy} panel={panel} setPanel={setPanel} onComplete={markComplete} onInvoice={showInvoice} onPay={payNow} />
                     {panel && panel !== 'invoice' && (
                       <form onSubmit={e => { e.preventDefault(); ({ cancel: cancelBooking, dispute: reportProblem, review: sendReview })[panel](); }} className="grid gap-2.5 border-t border-line bg-white p-3.5">
                         <div className="flex items-center justify-between"><strong className="text-sm">{{ cancel: current.my_role === 'crew' ? 'Cancel this booking' : 'Withdraw this request', dispute: 'Report a problem', review: 'Leave a review' }[panel]}</strong><button type="button" className="text-xs text-muted underline" onClick={() => setPanel(null)}>Close</button></div>
