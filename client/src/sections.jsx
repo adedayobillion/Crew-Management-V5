@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import CameraArt from './CameraArt.jsx';
+import CrewListing from './CrewListing.jsx';
 import { AnimatedNumber, Button, Field, Marquee, Reveal, SkeletonCard, SpotlightCard, Tagline, inputCls } from './ui.jsx';
 import { cn, http, naira, postJSON } from './lib.js';
 import { ArrowDownRight, Brush, ArrowLeft, ArrowLeftRight, ArrowUpRight, Camera, Clapperboard, Heart, Lightbulb, Mail, Menu, Mic, Scissors, ShieldCheck, Sparkles, UserRound, X } from 'lucide-react';
@@ -129,7 +130,7 @@ function ProCard({ p, i, saved, onSave, onBook }) {
         <div className="relative z-[1] flex h-[145px] items-center justify-center overflow-hidden text-[44px] text-white/70 sm:h-[150px]" style={{ background: p.cover }}>
           <span aria-hidden className="absolute -right-5 -top-[60px] size-[170px] rounded-full border border-white/15 shadow-[0_0_0_25px_#ffffff09]" />
           <span aria-hidden className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent transition-transform duration-1000 ease-out group-hover/spot:translate-x-full" />
-          <motion.span className="relative" whileHover={{ scale: 1.25, rotate: -6 }}>{p.symbol}</motion.span>
+          {p.photo ? <img src={p.photo} alt="" loading="lazy" className="absolute inset-0 size-full object-cover" /> : <motion.span className="relative" whileHover={{ scale: 1.25, rotate: -6 }}>{p.symbol}</motion.span>}
           <motion.button aria-label={(saved ? 'Remove ' : 'Save ') + p.name} aria-pressed={saved} whileHover={{ scale: 1.12 }} whileTap={{ scale: 0.8 }} onClick={() => onSave(p.id)}
             className="absolute right-3 top-3 grid size-[31px] place-items-center rounded-full bg-white/90 text-[17px] text-ink">
             <motion.span key={String(saved)} initial={{ scale: 0.4 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 500, damping: 12 }} className={saved ? 'text-[#e5484d]' : ''}><Heart className="size-[17px]" strokeWidth={2} fill={saved ? 'currentColor' : 'none'} aria-hidden="true" /></motion.span>
@@ -314,7 +315,7 @@ export function Dashboard({ onBack, onJoin, openAuth, toast, user, onMessages })
           ))}
       </div>
       {chat && <Chat bookingId={chat.id} title={chat.title} mine="client" onClose={() => setChat(null)} />}
-      <p className="my-2.5 text-[11px] text-muted">Your booking requests are loaded from your account on the server. Payments are not connected yet.</p>
+      <p className="my-2.5 text-[11px] text-muted">Your booking requests are loaded from your account on the server.</p>
     </motion.section>
   );
 }
@@ -353,6 +354,7 @@ export function CrewDashboard({ onBack, onJoin, toast, user, onMessages }) {
               <div key={l} className="rounded-2xl border border-line bg-white p-3.5 sm:p-5"><small className="text-[11px] text-muted">{l}</small><strong className="mt-2 block font-display text-[23px] font-extrabold tracking-[-.05em] sm:text-[27px]"><AnimatedNumber value={v} /></strong></div>
             ))}
           </div>
+          <CrewListing toast={toast} />
           <div className="overflow-hidden rounded-2xl border border-line bg-white">
             <div className="border-b border-line px-5 py-[18px] font-extrabold">Requests for your profile</div>
             {!rows.length ? <div className="p-7 text-[13px] text-muted">No requests yet. Clients can now find and book your profile.</div> : rows.map((b, i) => {
@@ -369,7 +371,7 @@ export function CrewDashboard({ onBack, onJoin, toast, user, onMessages }) {
             })}
           </div>
           {chat && <Chat bookingId={chat.id} title={chat.title} mine="crew" onClose={() => setChat(null)} />}
-          <p className="my-2.5 text-[11px] text-muted">Client contact details stay private until a booking is confirmed through the platform. Payments are not connected yet.</p>
+          <p className="my-2.5 text-[11px] text-muted">Client contact details stay private until a booking is confirmed through the platform.</p>
         </>)}
     </motion.section>
   );
