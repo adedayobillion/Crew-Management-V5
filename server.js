@@ -1053,20 +1053,28 @@ async function getAccessibleBooking(db, req, rawId) {
 app.get('/api/health', (req, res) => res.json({ ok: true, version: '2.4.0' }));
 
 /* ---------------- crew self-service: listing, photo, personal unavailability ---------------- */
-async function myListing(db, user) {
+async function myListing(db, user, rawId) {
   const ids = await crewProfessionalIds(db, user);
   if (!ids.length) fail(404, 'You do not have a published crew profile yet.');
-  return (await db.query('SELECT * FROM professionals WHERE id = $1', [ids[0]])).rows[0];
+  const id = rawId == null ? ids[0] : toInt(rawId);
+  if (!id) fail(400, 'Invalid listing id.');
+  if (!ids.includes(id)) fail(403, 'You do not own this listing.');
+  const row = (await db.query('SELECT * FROM professionals WHERE id = $1', [id])).rows[0];
+  if (!row) fail(404, 'Listing not found.');
+  return row;
 }
 const isoDate = v => { const x = String(v || ''); if (!/^\d{4}-\d{2}-\d{2}$/.test(x)) return null; const d = new Date(x + 'T00:00:00Z'); return !isNaN(d) && d.toISOString().slice(0, 10) === x ? x : null; };
 const listingView = p => ({ id: p.id, role: p.role, category: p.category || '', location: p.location || '', bio: p.bio || '', skills: p.skills || [], showreel: p.showreel || '', rate: Number(p.rate) || 0, photo: p.photo || '', is_active: p.is_active !== false, status: p.status });
 app.get('/api/crew/listing', requireUser, wrap(async (req, res) => {
-  const p = await myListing(pool, req.user);
-  const blocks = (await pool.query(`SELECT id, start_date::text AS start_date, end_date::text AS end_date, reason FROM availability_blocks WHERE professional_id = $1 AND end_date >= $2::date ORDER BY start_date`, [p.id, todayLagos()])).rows;
-  res.json({ listing: listingView(p), blocks });
+  const ids = await crewProfessionalIds(pool, req.user);
+  if (!ids.length) fail(404, 'You do not have a published crew profile yet.');
+  const rows = (await pool.query('SELECT * FROM professionals WHERE id = ANY($1::int[]) ORDER BY id', [ids])).rows;
+  const blocks = (await pool.query(`SELECT id, professional_id, start_date::text AS start_date, end_date::text AS end_date, reason FROM availability_blocks WHERE professional_id = ANY($1::int[]) AND end_date >= $2::date ORDER BY start_date`, [ids, todayLagos()])).rows;
+  const listings = rows.map(listingView);
+  res.json({ listings, listing: listings[0] || null, blocks });
 }));
-app.patch('/api/crew/listing', requireUser, wrap(async (req, res) => {
-  const p = await myListing(pool, req.user), b = req.body || {}, sets = [], vals = [];
+async function updateCrewListing(req, res, listingId) {
+  const p = await myListing(pool, req.user, listingId), b = req.body || {}, sets = [], vals = [];
   const add = (col, cast, v) => { vals.push(v); sets.push(`${col} = $${vals.length}::${cast}`); };
   if (b.role !== undefined) { const v = str(b.role, 80); if (v.length < 2) fail(400, 'Enter your role, for example Director of Photography.'); add('role', 'text', v); }
   if (b.category !== undefined) add('category', 'text', str(b.category, 60) || null);
@@ -1094,6 +1102,31 @@ app.patch('/api/crew/listing', requireUser, wrap(async (req, res) => {
   vals.push(p.id);
   const row = (await pool.query(`UPDATE professionals SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING *`, vals)).rows[0];
   res.json({ success: true, listing: listingView(row) });
+}
+app.patch('/api/crew/listing', requireUser, wrap(async (req, res) => updateCrewListing(req, res, null)));
+app.patch('/api/crew/listings/:id', requireUser, wrap(async (req, res) => updateCrewListing(req, res, req.params.id)));
+app.post('/api/crew/listings', requireUser, requireApproved, requireVerifiedEmail, wrap(async (req, res) => {
+  const b = req.body || {};
+  const role = str(b.role, 80), category = CATEGORIES.find(c => c.toLowerCase() === str(b.category, 60).toLowerCase());
+  const location = str(b.location || req.user.location, 120), bio = str(b.bio, 1000), showreel = str(b.showreel, 300);
+  const rate = Math.round(Number(b.rate));
+  const skills = (Array.isArray(b.skills) ? b.skills : String(b.skills || '').split(',')).map(x => str(x, 40)).filter(Boolean);
+  if (role.length < 2) fail(400, 'Enter a role for this listing.');
+  if (!category) fail(400, 'Choose a valid category.');
+  if (!Number.isFinite(rate) || rate < 1000 || rate > 10000000) fail(400, 'Enter a daily rate between ₦1,000 and ₦10,000,000.');
+  if (skills.length > 15) fail(400, 'Add at most 15 skills.');
+  if (showreel) { let u; try { u = new URL(showreel); } catch (e) { fail(400, 'Enter a valid portfolio link starting with https://'); } if (u.protocol !== 'https:') fail(400, 'The portfolio link must use https://'); }
+  const identity = (await pool.query('SELECT is_verified FROM users WHERE id = $1', [req.user.id])).rows[0];
+  if (!identity?.is_verified) fail(403, 'Verify your identity before adding another public listing.');
+  const professional = await withTx(async db => {
+    const appRow = (await db.query(`INSERT INTO crew_applications (user_id,name,full_name,email,role,location,portfolio,portfolio_url,bio,status) VALUES ($1,$2,$2,$3,$4,$5,$6,$6,$7,'approved') RETURNING id`, [req.user.id, req.user.name, req.user.email, role, location, showreel || '', bio])).rows[0];
+    const skillsCast = SKILLS_IS_JSON ? 'jsonb' : 'text[]';
+    const skillsValue = SKILLS_IS_JSON ? JSON.stringify([...new Set(skills)]) : [...new Set(skills)];
+    const p = (await db.query(`INSERT INTO professionals (application_id,name,role,category,location,bio,\"desc\",description,showreel,rate,daily_rate,rate_full_day,rate_half_day,skills,verified,status,credits,active,is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$8,$9::numeric,$9::numeric,$9::numeric,$10::numeric,$11::${skillsCast},$12,'approved','',TRUE,TRUE) RETURNING *`, ['app-' + appRow.id, req.user.name, role, category, location, bio, bio.slice(0,200), showreel || null, rate, Math.round(rate/2), skillsValue, true])).rows[0];
+    await db.query('UPDATE crew_applications SET professional_id = $1 WHERE id = $2', [p.id, appRow.id]);
+    return p;
+  });
+  res.status(201).json({ success: true, listing: listingView(professional) });
 }));
 const PHOTO_TYPES = { 'image/jpeg': b => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff, 'image/png': b => b.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])), 'image/webp': b => b.subarray(0, 4).toString('ascii') === 'RIFF' && b.subarray(8, 12).toString('ascii') === 'WEBP' };
 app.post('/api/crew/photo', requireUser, wrap(async (req, res) => {
@@ -1108,6 +1141,16 @@ app.post('/api/crew/photo', requireUser, wrap(async (req, res) => {
     await db.query('UPDATE professionals SET photo = $1::text WHERE id = $2', [`/api/professionals/${p.id}/photo?v=${Date.now()}`, p.id]);
   });
   res.json({ success: true, photo: `/api/professionals/${p.id}/photo?v=${Date.now()}` });
+}));
+app.post('/api/crew/photo', requireUser, wrap(async (req, res) => {
+  req.params.id = String((await myListing(pool, req.user)).id);
+  return app._router.handle(req, res, () => {});
+}));
+app.delete('/api/crew/listings/:id/photo', requireUser, wrap(async (req, res) => {
+  const p = await myListing(pool, req.user, req.params.id);
+  await pool.query('DELETE FROM professional_photos WHERE professional_id = $1', [p.id]);
+  await pool.query('UPDATE professionals SET photo = NULL WHERE id = $1', [p.id]);
+  res.json({ success: true });
 }));
 app.delete('/api/crew/photo', requireUser, wrap(async (req, res) => {
   const p = await myListing(pool, req.user);
