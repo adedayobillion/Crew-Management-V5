@@ -1106,7 +1106,7 @@ async function updateCrewListing(req, res, listingId) {
 }
 app.patch('/api/crew/listing', requireUser, wrap(async (req, res) => updateCrewListing(req, res, null)));
 app.patch('/api/crew/listings/:id', requireUser, wrap(async (req, res) => updateCrewListing(req, res, req.params.id)));
-app.post('/api/crew/listings', requireUser, requireApproved, requireVerifiedEmail, wrap(async (req, res) => {
+app.post('/api/crew/listings', requireUser, requireVerifiedEmail, wrap(async (req, res) => {
   const b = req.body || {};
   const role = str(b.role, 80), category = CATEGORIES.find(c => c.toLowerCase() === str(b.category, 60).toLowerCase());
   const location = str(b.location || req.user.location, 120), bio = str(b.bio, 1000), showreel = str(b.showreel, 300);
@@ -1798,7 +1798,7 @@ app.post('/api/team-bookings', requireUser, requireApproved, wrap(async (req, re
 }));
 
 /* ---------------- crew applications ---------------- */
-app.post('/api/crew-applications', requireUser, requireApproved, requireVerifiedEmail, wrap(async (req, res) => {
+app.post('/api/crew-applications', requireUser, requireVerifiedEmail, wrap(async (req, res) => {
   // Account approval + identity verification are the publishing gate. New listings
   // are published immediately; administrators can remove them from the marketplace.
   const identity = (await pool.query('SELECT is_verified FROM users WHERE id = $1', [req.user.id])).rows[0];
