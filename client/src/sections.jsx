@@ -339,7 +339,7 @@ export function CrewDashboard({ onBack, onJoin, toast, user, onMessages }) {
     <motion.section initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mx-auto w-[min(1200px,calc(100%-28px))] pb-16 pt-6">
       <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <div><Tagline>Crew workspace</Tagline><h2 className="mt-2 font-display text-[28px] font-extrabold tracking-[-.05em] sm:text-[32px]">Booking requests</h2></div>
-        <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={onBack}><ArrowLeft className="size-4" aria-hidden="true" />Back to marketplace</Button>{!data?.hasProfile && <Button onClick={onJoin}>{appStatus ? 'Apply again' : 'Join as crew'}</Button>}</div>
+        <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={onBack}><ArrowLeft className="size-4" aria-hidden="true" />Back to marketplace</Button></div>
       </div>
       {error ? <div className="rounded-2xl border border-line bg-white p-7 text-[13px] text-muted">{error} <Button size="sm" variant="ghost" onClick={load}>Try again</Button></div>
         : data === null ? <div className="rounded-2xl border border-line bg-white p-7 text-[13px] text-muted">Loading your crew requests…</div>
