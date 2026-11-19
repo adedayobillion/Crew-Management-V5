@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Button, Field, Tagline, inputCls } from './ui.jsx';
-import { http, postJSON } from './lib.js';
-import { ArrowLeft } from 'lucide-react';
+import { http, naira, postJSON } from './lib.js';
+import { ProposalFields } from './modals.jsx';
+import { ArrowLeft, CalendarClock, Check, X } from 'lucide-react';
 
 const documentLabels = {
   national_id: 'National ID',
@@ -208,6 +209,41 @@ export function ProfilePage({ user, onBack, onUserUpdated, onSettingsUpdated }) 
   );
 }
 
+const OPEN_STATES = ['awaiting_review', 'pending', 'counter_pending', 'confirmed'];
+const day = d => String(d).slice(0, 10);
+const statusStyle = { pending: 'bg-[#fff1d7] text-[#8b5c09]', accepted: 'bg-[#e3f4d3] text-[#3f6b12]', declined: 'bg-[#fde4e4] text-[#9b2c2c]', superseded: 'bg-[#eef1f4] text-[#64748b]' };
+
+function OfferCard({ message, thread, busy, onRespond }) {
+  const o = message.offer || {};
+  const mineRole = thread.my_role;
+  const proposedByMe = o.proposed_by === mineRole;
+  const title = message.kind === 'request' ? 'Booking request' : 'Proposed change';
+  return (
+    <div className={'w-full max-w-[88%] rounded-2xl border bg-white p-3.5 text-sm shadow-sm ' + (proposedByMe ? 'ml-auto border-ink/20' : 'mr-auto border-line')}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wide text-[#566274]"><CalendarClock className="size-3.5" aria-hidden="true" />{title}</span>
+        <span className={'rounded-full px-2 py-0.5 text-[10px] font-extrabold capitalize ' + (statusStyle[o.status] || statusStyle.pending)}>{o.status === 'superseded' ? 'replaced' : o.status}</span>
+      </div>
+      {message.masked_content && <p className="mt-2 whitespace-pre-wrap break-words text-[13px]">{message.masked_content}</p>}
+      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 rounded-xl bg-[#f5f7f3] p-3 text-xs">
+        <dt className="text-muted">Dates</dt><dd className="text-right font-bold">{day(o.start_date)}{o.end_date !== o.start_date ? ' to ' + day(o.end_date) : ''}</dd>
+        <dt className="text-muted">Length</dt><dd className="text-right font-bold">{o.booking_unit === 'half' ? 'Half day' : o.days + (o.days === 1 ? ' day' : ' days')}</dd>
+        <dt className="text-muted">Daily rate</dt><dd className="text-right font-bold">{naira(o.daily_rate)}</dd>
+        {mineRole === 'crew'
+          ? <><dt className="text-muted">You receive</dt><dd className="text-right font-extrabold">{naira(o.crew_net)}</dd></>
+          : <><dt className="text-muted">Total (incl. 10% fee)</dt><dd className="text-right font-extrabold">{naira(o.client_total)}</dd></>}
+      </dl>
+      {o.status === 'pending' && !proposedByMe && (
+        <div className="mt-3 flex gap-2">
+          <Button size="sm" disabled={busy} onClick={() => onRespond(message.id, 'accepted')}><Check className="size-4" aria-hidden="true" />Accept</Button>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => onRespond(message.id, 'declined')}><X className="size-4" aria-hidden="true" />Decline</Button>
+        </div>
+      )}
+      {o.status === 'pending' && proposedByMe && <p className="mt-2 text-[11px] text-muted">Waiting for the other person to answer.</p>}
+    </div>
+  );
+}
+
 export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) {
   const [threads, setThreads] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -215,6 +251,9 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [propose, setPropose] = useState(null);
+  const [note, setNote] = useState('');
+  const current = selected ? (threads.find(t => Number(t.id) === Number(selected.id)) || selected) : null;
 
   const loadThreads = useCallback(async () => {
     const r = await http('/api/inbox').catch(() => ({ ok: false, data: {} }));
@@ -229,6 +268,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
 
   const openThread = useCallback(async thread => {
     setSelected(thread);
+    setPropose(null);
     setDraft('');
     setError('');
     const r = await http('/api/bookings/' + thread.id + '/messages').catch(() => ({ ok: false, data: {} }));
@@ -260,13 +300,42 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
     stream.onmessage = event => {
       try {
         const message = JSON.parse(event.data);
-        setMessages(list => list.some(m => Number(m.id) === Number(message.id)) ? list : [...list, message]);
+        setMessages(list => list.some(m => Number(m.id) === Number(message.id)) ? list.map(m => Number(m.id) === Number(message.id) ? message : m) : [...list, message]);
         markRead(selected.id);
         loadThreads();
       } catch {}
     };
     return () => stream.close();
   }, [open, selected?.id, markRead, loadThreads]);
+
+  function openPropose() {
+    if (!current) return;
+    setNote('');
+    setPropose({ unit: current.booking_unit === 'half' ? 'half' : 'full', start: day(current.start_date), end: day(current.end_date), rate: String(Number(current.daily_rate || 0) || '') });
+  }
+  async function sendProposal(e) {
+    e.preventDefault();
+    if (!current || !propose || busy) return;
+    setBusy(true); setError('');
+    const body = { bookingUnit: propose.unit, startDate: propose.start, endDate: propose.unit === 'half' ? propose.start : propose.end, note };
+    if (current.my_role === 'crew' && propose.rate) body.dailyRate = Number(propose.rate);
+    const r = await postJSON('/api/bookings/' + current.id + '/offers', body).catch(() => ({ ok: false, data: {} }));
+    setBusy(false);
+    if (!r.ok) { setError(r.data.error || 'Could not send your proposal.'); return; }
+    setMessages(list => list.some(m => Number(m.id) === Number(r.data.message.id)) ? list : [...list, r.data.message]);
+    setPropose(null); setNote('');
+    await loadThreads();
+  }
+  async function respondToOffer(messageId, response) {
+    if (!current || busy) return;
+    setBusy(true); setError('');
+    const r = await postJSON('/api/bookings/' + current.id + '/offers/' + messageId + '/respond', { response }).catch(() => ({ ok: false, data: {} }));
+    if (!r.ok) setError(r.data.error || 'Could not send your answer.');
+    const fresh = await http('/api/bookings/' + current.id + '/messages').catch(() => ({ ok: false, data: [] }));
+    if (fresh.ok) setMessages(fresh.data || []);
+    setBusy(false);
+    await loadThreads();
+  }
 
   async function send(e) {
     e.preventDefault();
@@ -304,14 +373,32 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
               <section className="flex min-h-0 flex-1 flex-col">
                 {!selected ? <div className="grid flex-1 place-items-center p-6 text-sm text-muted">Choose a booking conversation.</div> : (
                   <>
-                    <div className="border-b border-line px-4 py-3"><strong className="text-sm">{selected.my_role === 'client' ? selected.professional_name : selected.client_name}</strong><span className="ml-2 text-[11px] text-muted">{selected.reference}</span></div>
+                    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-line px-4 py-3">
+                      <div><strong className="text-sm">{current.my_role === 'client' ? current.professional_name : current.client_name}</strong><span className="ml-2 text-[11px] text-muted">{current.reference}</span></div>
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="text-muted">{day(current.start_date)}{day(current.end_date) !== day(current.start_date) ? ' to ' + day(current.end_date) : ''}{current.booking_unit === 'half' ? ' · half day' : ''}</span>
+                        <strong>{naira(current.my_role === 'crew' ? current.crew_net : current.client_total)}</strong>
+                        <span className="rounded-full bg-[#eef1f4] px-2 py-0.5 text-[10px] font-extrabold capitalize text-[#445468]">{String(current.status).replaceAll('_', ' ')}</span>
+                        {OPEN_STATES.includes(current.status) && current.payment_status !== 'paid' && <Button size="sm" variant="ghost" onClick={openPropose}><CalendarClock className="size-4" aria-hidden="true" />Change dates or price</Button>}
+                      </div>
+                    </div>
                     <div className="flex-1 space-y-2 overflow-y-auto bg-[#f7f9f6] p-4">
                       {messages.map(message => {
+                        if (message.kind === 'system') return <p key={message.id} className="mx-auto w-fit max-w-[90%] rounded-full bg-[#e8ecef] px-3 py-1 text-center text-[11px] text-[#445468]">{message.masked_content}</p>;
+                        if (message.kind === 'request' || message.kind === 'offer') return <div key={message.id} className="flex flex-col"><span className={'mb-0.5 text-[10px] text-muted ' + (message.offer?.proposed_by === current.my_role ? 'text-right' : '')}>{message.offer?.proposed_by === current.my_role ? 'You' : message.sender_name}</span><OfferCard message={message} thread={current} busy={busy} onRespond={respondToOffer} /></div>;
                         const mine = message.sender_user_id ? Number(message.sender_user_id) === Number(user?.id) : (message.sender_type === selected.my_role && message.sender_name === user?.name);
                         return <div key={message.id} className={'flex flex-col ' + (mine ? 'items-end' : 'items-start')}><span className="mb-0.5 text-[10px] text-muted">{mine ? 'You' : message.sender_name}</span><p className={'max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-sm ' + (mine ? 'bg-ink text-white' : 'border border-line bg-white')}>{message.masked_content}</p></div>;
                       })}
                       {!messages.length && <p className="p-4 text-center text-xs text-muted">No messages yet. Start the conversation.</p>}
                     </div>
+                    {propose && (
+                      <form onSubmit={sendProposal} className="grid gap-3 border-t border-line bg-white p-3.5">
+                        <div className="flex items-center justify-between"><strong className="text-sm">Propose a change</strong><button type="button" className="text-xs text-muted underline" onClick={() => setPropose(null)}>Cancel</button></div>
+                        <ProposalFields value={propose} onChange={setPropose} canEditRate={current.my_role === 'crew'} baseRate={Number(current.daily_rate || 0)} />
+                        <input className={inputCls} value={note} maxLength={1000} onChange={e => setNote(e.target.value)} placeholder="Add a note (optional)" />
+                        <Button type="submit" disabled={busy || !propose.start}>{busy ? 'Sending…' : 'Send proposal'}</Button>
+                      </form>
+                    )}
                     <form onSubmit={send} className="flex gap-2 border-t border-line p-3"><input className={inputCls + ' flex-1'} value={draft} onChange={e => setDraft(e.target.value)} maxLength={2000} placeholder="Write a message…" /><Button type="submit" disabled={busy || !draft.trim()}>{busy ? 'Sending…' : 'Send'}</Button></form>
                   </>
                 )}

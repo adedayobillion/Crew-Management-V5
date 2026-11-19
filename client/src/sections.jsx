@@ -285,15 +285,6 @@ export function Dashboard({ onBack, onJoin, openAuth, toast, user, onMessages })
     setRows((data.bookings || []).map(b => ({ id: b.reference, dbId: b.id, counter: b.counter_details, pro: b.professional_name, role: b.professional_role, type: b.project_type, clientTotal: Number(b.client_total), crewNet: Number(b.crew_net), unit: b.booking_unit, date: String(b.start_date).slice(0, 10), end: String(b.end_date).slice(0, 10), location: b.project_location, status: String(b.status).replaceAll('_', ' ') })));
   }
   useEffect(() => { load(); }, []);
-  const [busy, setBusy] = useState(0);
-  async function answerCounter(dbId, response) {
-    setBusy(dbId);
-    const r = await postJSON(`/api/bookings/${dbId}/counter-response`, { response }).catch(() => ({ ok: false, data: {} }));
-    setBusy(0);
-    if (!r.ok) { toast(r.data.error || 'Could not send your response.'); return; }
-    toast(response === 'approved' ? 'Counter-offer approved. Booking confirmed.' : 'Counter-offer rejected.');
-    load();
-  }
   const pending = (rows || []).filter(b => ['awaiting review', 'awaiting terms', 'confirmed'].includes(b.status)).length;
   return (
     <motion.section initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mx-auto w-[min(1200px,calc(100%-28px))] pb-16 pt-6">
@@ -316,10 +307,9 @@ export function Dashboard({ onBack, onJoin, openAuth, toast, user, onMessages })
           : rows.map((b, i) => (
             <motion.div key={b.id} initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }} className="grid gap-2 border-b border-[#edf0f1] p-[15px] text-xs transition-colors last:border-0 hover:bg-[#fafcf5] sm:grid-cols-[1.2fr_1fr_.8fr_.7fr] sm:items-center sm:gap-3 sm:px-5 sm:py-4">
               <div><strong>{b.pro}</strong><br /><span className="text-muted">{b.role}</span></div>
-              <div>{b.type}<br /><span className="text-muted">{b.date || 'Date to agree'}{b.end && b.end !== b.date ? ' to ' + b.end : ''} · {b.unit === 'half' ? 'Half-day · ' : ''}{b.location}</span></div>
+              <div>{b.date}{b.end && b.end !== b.date ? ' to ' + b.end : ''}<br /><span className="text-muted">{b.unit === 'half' ? 'Half day' : 'Full day(s)'}</span></div>
               <div><span className="inline-flex items-center gap-1.5 rounded-full bg-[#fff1d7] px-2.5 py-1 text-[10px] font-extrabold capitalize text-[#8b5c09]"><span className="size-[5px] rounded-full bg-current" />{b.status}</span><br /><span className="text-muted">Ref: {b.id}</span></div>
-              <div><strong>{naira(b.clientTotal)}</strong><br /><span className="text-muted">client total · estimated crew payout {naira(b.crewNet)}</span><div className="mt-2"><Button size="sm" variant="ghost" onClick={() => onMessages?.(b.dbId)}>Messages</Button></div></div>
-              {b.status === 'counter pending' && <div className="rounded-xl bg-[#fff8e8] p-3 sm:col-span-full"><strong>Counter-offer from {b.pro}</strong><p className="my-1.5 whitespace-pre-wrap text-muted">{b.counter || 'No details provided.'}</p><div className="flex flex-wrap gap-1.5"><Button size="sm" disabled={busy === b.dbId} onClick={() => answerCounter(b.dbId, 'approved')}>Approve</Button><Button size="sm" variant="ghost" disabled={busy === b.dbId} onClick={() => answerCounter(b.dbId, 'rejected')}>Reject</Button></div></div>}
+              <div><strong>{naira(b.clientTotal)}</strong><br /><span className="text-muted">client total</span><div className="mt-2"><Button size="sm" variant="ghost" onClick={() => onMessages?.(b.dbId)}>Open chat</Button></div></div>
             </motion.div>
           ))}
       </div>
@@ -340,16 +330,6 @@ export function CrewDashboard({ onBack, onJoin, toast, user, onMessages }) {
     setData(r.data);
   }
   useEffect(() => { load(); }, []);
-  async function respond(id, response) {
-    let counter_details;
-    if (response === 'countered') { counter_details = prompt('What would you like to change? (rate, dates, scope…)'); if (!counter_details) return; }
-    setBusy(id);
-    const r = await postJSON(`/api/crew/bookings/${id}/respond`, { response, counter_details }).catch(() => ({ ok: false, data: {} }));
-    setBusy(0);
-    if (!r.ok) { toast(r.data.error || 'Could not send your response.'); return; }
-    toast(response === 'accepted' ? 'Booking accepted. Those dates are now blocked on your calendar.' : response === 'declined' ? 'Booking declined.' : 'Counter-offer sent.');
-    load();
-  }
   const rows = data?.bookings || [];
   const waiting = rows.filter(b => ['awaiting_review', 'pending', 'counter_pending'].includes(b.status));
   const appStatus = data?.application?.status;
@@ -376,15 +356,13 @@ export function CrewDashboard({ onBack, onJoin, toast, user, onMessages }) {
           <div className="overflow-hidden rounded-2xl border border-line bg-white">
             <div className="border-b border-line px-5 py-[18px] font-extrabold">Requests for your profile</div>
             {!rows.length ? <div className="p-7 text-[13px] text-muted">No requests yet. Clients can now find and book your profile.</div> : rows.map((b, i) => {
-              const open = ['awaiting_review', 'pending'].includes(b.status);
-              return (
+                            return (
                 <motion.div key={b.id} initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }} className="grid gap-2 border-b border-[#edf0f1] p-[15px] text-xs last:border-0 sm:grid-cols-[1.1fr_1.2fr_.8fr_1fr] sm:items-center sm:gap-3 sm:px-5 sm:py-4">
-                  <div><strong>{b.client_name}</strong><br /><span className="text-muted">{b.project_type}{b.project_location ? ' · ' + b.project_location : ''}</span></div>
-                  <div>{String(b.start_date).slice(0, 10)}{b.end_date !== b.start_date ? ' to ' + String(b.end_date).slice(0, 10) : ''}{b.booking_unit === 'half' ? ' · Half-day' : ''}<br /><span className="text-muted">{b.project_brief ? b.project_brief.slice(0, 90) : 'No brief provided'}</span></div>
+                  <div><strong>{b.client_name}</strong><br /><span className="text-muted">{b.booking_unit === 'half' ? 'Half day' : 'Full day(s)'}</span></div>
+                  <div>{String(b.start_date).slice(0, 10)}{b.end_date !== b.start_date ? ' to ' + String(b.end_date).slice(0, 10) : ''}{b.booking_unit === 'half' ? ' · Half-day' : ''}<br /><span className="text-muted">{b.project_brief ? b.project_brief.slice(0, 90) : 'Open the chat for details'}</span></div>
                   <div><span className="inline-flex items-center gap-1.5 rounded-full bg-[#fff1d7] px-2.5 py-1 text-[10px] font-extrabold capitalize text-[#8b5c09]"><span className="size-[5px] rounded-full bg-current" />{String(b.status).replaceAll('_', ' ')}</span><br /><span className="text-muted">Ref: {b.reference}</span></div>
                   <div><strong>{naira(b.crew_net)}</strong> <span className="text-muted">your payout</span>
-                    <div className="mt-2"><Button size="sm" variant="ghost" onClick={() => onMessages?.(b.id)}>Messages</Button></div>
-                    {open && <div className="mt-2 flex flex-wrap gap-1.5"><Button size="sm" disabled={busy === b.id} onClick={() => respond(b.id, 'accepted')}>Accept</Button><Button size="sm" variant="ghost" disabled={busy === b.id} onClick={() => respond(b.id, 'countered')}>Counter</Button><Button size="sm" variant="ghost" disabled={busy === b.id} onClick={() => respond(b.id, 'declined')}>Decline</Button></div>}
+                    <div className="mt-2"><Button size="sm" variant="ghost" onClick={() => onMessages?.(b.id)}>Open chat</Button></div>
                   </div>
                 </motion.div>
               );

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Button, Field, Modal, ModalHead, SlidingTabs, Tagline, inputCls, useToast } from './ui.jsx';
-import { naira, postJSON } from './lib.js';
+import { naira, postJSON, quote, todayLagos } from './lib.js';
 import { legalPolicies } from './legal.js';
 import { ArrowUpRight } from 'lucide-react';
 
@@ -58,61 +58,52 @@ export function AuthModal({ open, mode, setMode, defaultRole, onClose, onSuccess
   );
 }
 
-/* ================= Booking ================= */
-const blankBooking = { projectType: '', unit: 'full', start: '', end: '', location: '', overtime: '', brief: '' };
+/* ================= Booking: dates + a message; everything else is agreed in the chat ================= */
+export function ProposalFields({ value, onChange, canEditRate, baseRate }) {
+  const set = patch => onChange(v => { const n = { ...v, ...patch }; if (n.unit === 'half') n.end = n.start; else if (n.end && n.start && n.end < n.start) n.end = n.start; return n; });
+  const q = quote(value.unit, value.start, value.end, value.rate || baseRate);
+  return (
+    <div className="grid gap-3">
+      <div role="group" aria-label="Booking length" className="inline-flex w-fit rounded-full border border-line bg-white p-0.5 text-xs font-bold">
+        {[['full', 'Full day(s)'], ['half', 'Half day']].map(([k, l]) => (
+          <button key={k} type="button" aria-pressed={value.unit === k} onClick={() => set({ unit: k })} className={'rounded-full px-3.5 py-1.5 transition ' + (value.unit === k ? 'bg-ink text-white' : 'text-[#566274]')}>{l}</button>
+        ))}
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={value.unit === 'half' ? 'Date' : 'Start date'} htmlFor="pf-start"><input id="pf-start" type="date" required min={todayLagos()} className={inputCls} value={value.start} onChange={e => set({ start: e.target.value })} /></Field>
+        {value.unit === 'full' && <Field label="End date" htmlFor="pf-end"><input id="pf-end" type="date" required min={value.start || todayLagos()} className={inputCls} value={value.end} onChange={e => set({ end: e.target.value })} /></Field>}
+      </div>
+      {canEditRate && <Field label="Daily rate (₦)" htmlFor="pf-rate"><input id="pf-rate" type="number" min="1" step="1" inputMode="numeric" className={inputCls} value={value.rate} onChange={e => set({ rate: e.target.value })} /></Field>}
+      <p className="rounded-xl bg-[#f5f7f3] px-3.5 py-2.5 text-xs text-[#445468]" aria-live="polite">
+        {naira(value.rate || baseRate)}/day × {q.days} {q.days === 1 ? 'day' : q.days === 0.5 ? 'day' : 'days'} + 10% service fee = <strong className="text-ink">{naira(q.clientTotal)}</strong> total
+      </p>
+    </div>
+  );
+}
+
 export function BookingModal({ pro, user, onClose, onSent, onNeedAuth }) {
-  const open = !!pro; const [f, setF] = useState(blankBooking); const [busy, setBusy] = useState(false);
+  const open = !!pro; const blank = { unit: 'full', start: '', end: '', rate: '' };
+  const [f, setF] = useState(blank); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
   const toast = useToast();
-  useEffect(() => { if (open) setF(blankBooking); }, [pro?.id]);
-  const set = k => e => setF(s => {
-    const n = { ...s, [k]: e.target.value };
-    if (n.unit === 'half') n.end = n.start; else if (n.end && n.start && n.end < n.start) n.end = n.start;
-    return n;
-  });
-  const m = useMemo(() => {
-    let days = 1;
-    if (f.unit === 'half') days = 0.5;
-    else if (f.start && f.end) days = Math.max(1, Math.floor((new Date(f.end + 'T12:00:00') - new Date(f.start + 'T12:00:00')) / 86400000) + 1);
-    const base = pro ? Math.round(pro.rate * days) : 0; const clientFee = Math.round(base * 0.1), crewFee = Math.round(base * 0.1);
-    return { days, base, clientFee, crewFee, clientTotal: base + clientFee, crewNet: base - crewFee, agencyGross: clientFee + crewFee };
-  }, [f.unit, f.start, f.end, pro]);
+  useEffect(() => { if (open) { setF(blank); setMessage(''); } }, [pro?.id]);
   async function submit(e) {
     e.preventDefault(); if (!pro) return; setBusy(true);
     try {
-      const { ok, status, data } = await postJSON('/api/bookings', { professionalId: pro.id, clientName: user.name, clientEmail: user.email, projectType: f.projectType, bookingUnit: f.unit, startDate: f.start, endDate: f.end, projectLocation: f.location, overtimeTerms: f.overtime, brief: f.brief });
-      if (!ok) { if (status === 401) { onNeedAuth(pro); return; } throw new Error(data.error || 'Could not save booking.'); }
+      const { ok, status, data } = await postJSON('/api/bookings', { professionalId: pro.id, bookingUnit: f.unit, startDate: f.start, endDate: f.unit === 'half' ? f.start : (f.end || f.start), message });
+      if (!ok) { if (status === 401) { onNeedAuth(pro); return; } throw new Error(data.error || 'Could not send your request.'); }
       onSent(data.booking);
     } catch (err) { toast(err.message || 'Could not connect to backend.'); } finally { setBusy(false); }
   }
-  const row = (a, b, cls = '') => <div className={'flex justify-between gap-4 ' + cls}><span>{a}</span><strong className="text-right">{b}</strong></div>;
-  const daysLabel = f.unit === 'half' ? 'half-day (50% of daily rate)' : `${m.days} full day${m.days === 1 ? '' : 's'}`;
   return (
     <Modal open={open} onClose={onClose} labelledBy="bookingTitle">
-      <ModalHead tag="Booking request" id="bookingTitle" title={pro ? 'Request ' + pro.role : 'Book a professional'} onClose={onClose} />
-      <form onSubmit={submit}>
-        <div className="grid gap-3.5 sm:grid-cols-2">
-          <Field label="Your name *" htmlFor="clientName"><input id="clientName" className={inputCls} readOnly value={user?.name || ''} /></Field>
-          <Field label="Email *" htmlFor="clientEmail"><input id="clientEmail" className={inputCls} readOnly value={user?.email || ''} /></Field>
-          <Field label="Project type *" htmlFor="projectType"><select id="projectType" required className={inputCls} value={f.projectType} onChange={set('projectType')}><option value="">Choose project</option>{['Film / TV', 'Commercial / advert', 'Music video', 'Digital content', 'Documentary', 'Other'].map(o => <option key={o}>{o}</option>)}</select></Field>
-          <Field label="Booking type *" htmlFor="bookingUnit"><select id="bookingUnit" required className={inputCls} value={f.unit} onChange={set('unit')}><option value="full">Full day(s) — choose dates</option><option value="half">Half-day — single date</option></select></Field>
-          <Field label="Start date *" htmlFor="projectDate"><input id="projectDate" type="date" required min={new Date(Date.now() + 3600000).toISOString().slice(0, 10)} className={inputCls} value={f.start} onChange={set('start')} /></Field>
-          <Field label="End date *" htmlFor="projectEndDate"><input id="projectEndDate" type="date" required className={inputCls} value={f.end} min={f.start || undefined} disabled={f.unit === 'half'} onChange={set('end')} /></Field>
-          <Field label="Production location *" htmlFor="projectLocation" full><input id="projectLocation" required className={inputCls} value={f.location} onChange={set('location')} placeholder="e.g. Lekki, Lagos" /></Field>
-          <Field label="Proposed overtime rate / terms" htmlFor="overtimeTerms" full><input id="overtimeTerms" className={inputCls} value={f.overtime} onChange={set('overtime')} placeholder="e.g. ₦15,000 per additional hour, subject to crew agreement" /></Field>
-          <Field label="Project brief & deliverables *" htmlFor="brief" full><textarea id="brief" required className={inputCls + ' min-h-24'} value={f.brief} onChange={set('brief')} placeholder="Describe the job, expected deliverables, schedule and any special requirements." /></Field>
-        </div>
-        <div className="my-4 grid gap-1.5 rounded-[13px] bg-[#f5f7f3] p-3.5 text-xs">
-          {row(`Professional rate · ${daysLabel}`, naira(m.base))}
-          {row('Client service fee (10%)', '+' + naira(m.clientFee))}
-          {row('Crew commission (10%)', naira(m.crewFee) + ' deducted')}
-          {row("Professional's estimated payout after completion", naira(m.crewNet))}
-          {row('Agency gross commission', naira(m.agencyGross))}
-          <div className="flex justify-between gap-4"><span>Overtime</span><span>Excluded; agree before confirmation</span></div>
-          <div className="flex justify-between gap-4"><span>Payment processing / payout fees</span><span>Not included</span></div>
-          <div className="mt-1.5 flex justify-between gap-4 border-t border-[#dfe4dc] pt-2.5 text-sm font-extrabold"><span>Client total before processing fees</span><motion.strong key={m.clientTotal} initial={{ scale: 1.15, color: '#527a14' }} animate={{ scale: 1, color: '#172337' }}>{naira(m.clientTotal)}</motion.strong></div>
-        </div>
-        <p className="my-2.5 text-[11px] text-muted">Daily rates support full-day bookings across selected calendar dates or a half-day booking on one date (estimated at 50% of the daily rate). Any overtime rate and terms must be agreed by the client and crew before booking confirmation. Commission: 10% client fee added and 10% crew commission deducted. Payout is intended after project completion. Payments are currently disabled; no money is collected through this website.</p>
-        <Button variant="dark" type="submit" disabled={busy} className="w-full">{busy ? 'Sending request…' : <>Send booking request <ArrowUpRight className="size-4" aria-hidden="true" /></>}</Button>
+      <ModalHead tag={pro ? pro.role : 'Booking request'} id="bookingTitle" title={pro ? 'Message ' + pro.name : 'Book a professional'} onClose={onClose} />
+      <form onSubmit={submit} className="grid gap-4">
+        <ProposalFields value={f} onChange={setF} canEditRate={false} baseRate={pro?.rate} />
+        <Field label="Your message" htmlFor="bookingMessage">
+          <textarea id="bookingMessage" className={inputCls + ' min-h-24'} value={message} maxLength={2000} onChange={e => setMessage(e.target.value)} placeholder="Tell them about the job: what you're shooting, where, call time. You can agree changes to the dates and price in the chat." />
+        </Field>
+        <Button variant="dark" type="submit" disabled={busy || !f.start} className="w-full">{busy ? 'Sending…' : <>Send request <ArrowUpRight className="size-4" aria-hidden="true" /></>}</Button>
+        <p className="text-center text-[11px] leading-relaxed text-muted">This opens a conversation in your inbox. Nothing is confirmed or charged until {pro?.name || 'the crew member'} accepts the dates and price in the chat.</p>
       </form>
     </Modal>
   );
