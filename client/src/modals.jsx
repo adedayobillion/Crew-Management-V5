@@ -144,7 +144,7 @@ export function BookingModal({ pro, user, onClose, onSent, onNeedAuth }) {
 }
 
 /* ================= Join ================= */
-const blankJoin = { role: '', location: '', portfolio: '', bio: '' };
+const blankJoin = { role: '', location: '', portfolio: '', bio: '', dailyRate: '' };
 export function JoinModal({ open, user, onClose, onDone, onNeedAuth, onNeedProfile }) {
   const [f, setF] = useState(blankJoin); const [busy, setBusy] = useState(false); const toast = useToast();
   useEffect(() => { if (open) setF(blankJoin); }, [open]);
@@ -152,7 +152,7 @@ export function JoinModal({ open, user, onClose, onDone, onNeedAuth, onNeedProfi
   async function submit(e) {
     e.preventDefault(); setBusy(true);
     try {
-      const { ok, status, data } = await postJSON('/api/crew-applications', { name: user.name, email: user.email, role: f.role, location: f.location, portfolio: f.portfolio, bio: f.bio });
+      const { ok, status, data } = await postJSON('/api/crew-applications', { name: user.name, email: user.email, role: f.role, location: f.location, portfolio: f.portfolio, bio: f.bio, dailyRate: Number(f.dailyRate) });
       if (!ok) { if (status === 401) { onNeedAuth(); return; } throw new Error(data.error || 'Could not submit application.'); }
       onDone(data.application);
     } catch (err) { toast(err.message || 'Could not connect to backend.'); } finally { setBusy(false); }
@@ -163,7 +163,7 @@ export function JoinModal({ open, user, onClose, onDone, onNeedAuth, onNeedProfi
       {!user?.isVerified && (
         <div role="alert" className="mb-4 rounded-xl border border-[#ead7a5] bg-[#fff8e6] p-4 text-sm text-[#72530b]">
           <strong className="block">Identity verification required</strong>
-          <p className="mt-1">Please upload your identity document in your Profile for verification before applying as a crew member. You can submit your application once an administrator approves your document.</p>
+          <p className="mt-1">Please upload your identity document in your Profile. Once the admin verifies your account, you can publish crew listings directly.</p>
           <Button type="button" variant="dark" className="mt-3" onClick={onNeedProfile}>Go to Profile</Button>
         </div>
       )}
@@ -173,11 +173,12 @@ export function JoinModal({ open, user, onClose, onDone, onNeedAuth, onNeedProfi
           <Field label="Email *" htmlFor="crewEmail"><input id="crewEmail" className={inputCls} readOnly value={user?.email || ''} /></Field>
           <Field label="Primary role *" htmlFor="crewRole"><select id="crewRole" required className={inputCls} value={f.role} onChange={set('role')}><option value="">Select role</option>{['Camera', 'Production', 'Editing', 'Lighting', 'Sound', 'Creative', 'Makeup', 'Other'].map(o => <option key={o}>{o}</option>)}</select></Field>
           <Field label="Base location *" htmlFor="crewLocation"><input id="crewLocation" required className={inputCls} value={f.location} onChange={set('location')} placeholder="e.g. Lagos" /></Field>
+          <Field label="Daily rate (₦) *" htmlFor="crewDailyRate"><input id="crewDailyRate" type="number" min="1000" max="10000000" step="1" required className={inputCls} value={f.dailyRate} onChange={set('dailyRate')} placeholder="e.g. 50000" /></Field>
           <Field label="Portfolio / showreel link" htmlFor="crewPortfolio" full><input id="crewPortfolio" type="url" className={inputCls} value={f.portfolio} onChange={set('portfolio')} placeholder="https://" /></Field>
           <Field label="Skills and experience *" htmlFor="crewBio" full><textarea id="crewBio" required className={inputCls + ' min-h-24'} value={f.bio} onChange={set('bio')} placeholder="Summarise your experience, credits and skills." /></Field>
         </div>
-        <p className="my-3 text-[11px] text-muted">Submitting this form creates an application for review; it does not automatically publish a profile or guarantee work.</p>
-        <Button variant="dark" type="submit" disabled={busy || !user?.isVerified} className="w-full">{busy ? 'Submitting…' : <>Prepare crew application <ArrowUpRight className="size-4" aria-hidden="true" /></>}</Button>
+        <p className="my-3 text-[11px] text-muted">After your account is verified, your listing is published automatically. You can manage your listing from your Crew workspace.</p>
+        <Button variant="dark" type="submit" disabled={busy || !user?.isVerified || !f.dailyRate || Number(f.dailyRate) < 1000} className="w-full">{busy ? 'Submitting…' : <>Publish crew listing <ArrowUpRight className="size-4" aria-hidden="true" /></>}</Button>
       </form>
     </Modal>
   );
