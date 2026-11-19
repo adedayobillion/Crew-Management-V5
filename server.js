@@ -1078,6 +1078,7 @@ async function updateCrewListing(req, res, listingId) {
   const add = (col, cast, v) => { vals.push(v); sets.push(`${col} = $${vals.length}::${cast}`); };
   if (b.role !== undefined) { const v = str(b.role, 80); if (v.length < 2) fail(400, 'Enter your role, for example Director of Photography.'); add('role', 'text', v); }
   if (b.category !== undefined) add('category', 'text', str(b.category, 60) || null);
+  if (b.location !== undefined) add('location', 'text', str(b.location, 120) || null);
   if (b.bio !== undefined) { const v = str(b.bio, 1000) || null; add('bio', 'text', v); add('"desc"', 'text', v); add('description', 'text', v); }
   if (b.rate !== undefined) {
     const r = Math.round(Number(b.rate));
