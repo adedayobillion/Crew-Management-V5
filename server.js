@@ -1976,7 +1976,7 @@ app.get('/api/admin/listings', adminGuard, wrap(async (req, res) => {
 app.delete('/api/admin/listings/:id', adminGuard, wrap(async (req, res) => {
   const id = toInt(req.params.id); if (!id) fail(400, 'Invalid listing id.');
   await withTx(async db => {
-    const p = (await db.query('SELECT id,user_id,name,role FROM professionals WHERE id = $1 FOR UPDATE', [id])).rows[0];
+    const p = (await db.query('SELECT p.id,ca.user_id,p.name,p.role FROM professionals p LEFT JOIN crew_applications ca ON p.application_id = 'app-' || ca.id::text WHERE p.id = $1 FOR UPDATE OF p', [id])).rows[0];
     if (!p) fail(404, 'Listing not found.');
     // Keep the record and booking history, but remove it from all public marketplace queries.
     await db.query("UPDATE professionals SET status = 'removed', active = FALSE, is_active = FALSE WHERE id = $1", [id]);
