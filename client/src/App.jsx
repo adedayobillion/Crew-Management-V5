@@ -188,6 +188,7 @@ function Shell() {
       <BookingModal pro={bookingPro} user={user} onClose={() => setBookingPro(null)} onNeedAuth={pro => { setBookingPro(null); openAuth('login', () => setBookingPro(pro)); }}
         onSent={b => { setBookingPro(null); toast('Request sent. Agree the details in the chat. Nothing is charged until it is accepted.'); openInbox(b.id); }} />
       <JoinModal open={joinOpen} user={user} onClose={() => setJoinOpen(false)} onNeedAuth={() => { setJoinOpen(false); openAuth('login', () => setJoinOpen(true), 'crew'); }}
+        onNeedProfile={() => { setJoinOpen(false); openProfile(); }}
         onDone={a => { setJoinOpen(false); toast('Crew application received for review. Application #' + a.id + '.'); }} />
       <LegalModal topic={legal} setTopic={setLegal} onClose={() => setLegal(null)} />
       <MessageInbox open={inboxOpen} onClose={() => setInboxOpen(false)} onRead={refreshUnread} user={user} initialBookingId={inboxInitialId} />
