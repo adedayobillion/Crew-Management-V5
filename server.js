@@ -710,11 +710,11 @@ app.patch('/api/profile', requireUser, wrap(async (req, res) => {
       [name, phone || null, location || null, bio || null, req.user.id]);
     // Keep the public crew listing in sync with the account owner’s editable profile.
     const applications = await db.query(
-      'UPDATE crew_applications SET name=$1, full_name=$1, email=$2, location=$3, bio=$4 WHERE user_id=$5 RETURNING id, professional_id',
+      'UPDATE crew_applications SET name=$1::text, full_name=$1::text, email=$2::text, location=$3::text, bio=$4::text WHERE user_id=$5 RETURNING id, professional_id',
       [name, updated.rows[0].email, location || '', bio || '', req.user.id]);
     for (const application of applications.rows) {
       await db.query(
-        "UPDATE professionals SET name=$1, location=$2, bio=$3, \"desc\"=$4, description=$3 WHERE id=$5 OR application_id=$6",
+        "UPDATE professionals SET name=$1::text, location=$2::text, bio=$3::text, \"desc\"=$4::text, description=$3::text WHERE id=$5 OR application_id=$6::text",
         [name, location || '', bio || '', (bio || '').slice(0,200), application.professional_id, 'app-' + application.id]);
     }
     return updated.rows;
