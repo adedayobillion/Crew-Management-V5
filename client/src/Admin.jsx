@@ -25,7 +25,7 @@ export default function Admin() {
   const [tab, setTab] = useState('accounts'); const [msg, setMsg] = useState({ text: '', err: false });
   const [stats, setStats] = useState(null); const [users, setUsers] = useState(null);
   const [filters, setFilters] = useState({ status: 'all', flag: 'all', q: '' });
-  const [audit, setAudit] = useState(null); const [bookings, setBookings] = useState(null); const [apps, setApps] = useState(null); const [idDocuments, setIdDocuments] = useState(null);
+  const [audit, setAudit] = useState(null); const [bookings, setBookings] = useState(null); const [apps, setApps] = useState(null); const [listings, setListings] = useState(null); const [idDocuments, setIdDocuments] = useState(null);
   const [notes, setNotes] = useState({});
   const say = (text, err = false) => setMsg({ text, err });
 
@@ -41,6 +41,11 @@ export default function Admin() {
   const loadAudit = async () => { try { setAudit((await api('/api/admin/audit-log')).events); } catch (e) { say(e.message, true); } };
   const loadBookings = async () => { try { setBookings((await api('/api/admin/bookings')).bookings); } catch (e) { say(e.message, true); } };
   const loadApps = async () => { try { setApps((await api('/api/admin/applications')).applications); } catch (e) { say(e.message, true); } };
+  const loadListings = async () => { try { setListings((await api('/api/admin/listings')).listings); } catch (e) { say(e.message, true); } };
+  async function removeListing(id, name, role) {
+    if (!confirm('Remove ' + name + ' — ' + role + ' from the public marketplace? The account and booking history will remain.')) return;
+    try { await api('/api/admin/listings/' + id, { method: 'DELETE' }); say('Listing removed from marketplace.'); await loadListings(); } catch (e) { say(e.message, true); }
+  }
   const loadIdDocuments = async () => { try { setIdDocuments((await api('/api/admin/id-documents')).documents); } catch (e) { say(e.message, true); } };
   async function downloadIdDocument(id, filename) {
     try {
@@ -70,7 +75,7 @@ export default function Admin() {
     catch (err) { setLoginErr(err.message === 'Unauthorized' ? 'Token not accepted. Check CMA_ADMIN_TOKEN in Railway.' : err.message); }
   }
   function lock() { setToken(''); setTokenInput(''); setAuthed(false); setStats(null); setUsers(null); }
-  useEffect(() => { if (!authed) return; if (tab === 'audit') loadAudit(); if (tab === 'bookings') loadBookings(); if (tab === 'applications') loadApps(); if (tab === 'identity') loadIdDocuments(); }, [tab, authed]);
+  useEffect(() => { if (!authed) return; if (tab === 'audit') loadAudit(); if (tab === 'bookings') loadBookings(); if (tab === 'applications') loadApps(); if (tab === 'listings') loadListings(); if (tab === 'identity') loadIdDocuments(); }, [tab, authed]);
 
   const labels = { approve: 'approve this account', reject: 'reject this account', verify: 'mark this account verified', unverify: 'remove this verification', flag_suspicious: 'flag this account for suspicious activity', clear_suspicious: 'clear this suspicious-activity flag', suspend: 'suspend this account and revoke its active sessions', reactivate: 'reactivate this account' };
   async function act(id, action) {
@@ -130,7 +135,7 @@ export default function Admin() {
                 ))}
               </div>
             )}
-            <SlidingTabs id="adminTabs" value={tab} onChange={setTab} className="my-4 w-fit max-w-full overflow-x-auto" tabs={[{ value: 'accounts', label: 'Accounts' }, { value: 'audit', label: 'Admin activity log' }, { value: 'bookings', label: 'Bookings' }, { value: 'applications', label: 'Crew applications' }, { value: 'identity', label: 'ID verification' }]} />
+            <SlidingTabs id="adminTabs" value={tab} onChange={setTab} className="my-4 w-fit max-w-full overflow-x-auto" tabs={[{ value: 'accounts', label: 'Accounts' }, { value: 'audit', label: 'Admin activity log' }, { value: 'bookings', label: 'Bookings' }, { value: 'applications', label: 'Crew applications' }, { value: 'listings', label: 'Marketplace listings' }, { value: 'identity', label: 'ID verification' }]} />
             <AnimatePresence mode="wait">
               <motion.section key={tab} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
                 {tab === 'accounts' && (<>
@@ -177,6 +182,11 @@ export default function Admin() {
                 {tab === 'applications' && (<>
                   <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Crew applications</h2><Act onClick={loadApps}>Refresh</Act></div>
                   <div className={cn(card, 'mt-3 p-0')}>{apps && <Table headers={['Name', 'Email', 'Role', 'Location', 'Portfolio', 'Status', 'Application', 'Actions']} rows={apps.map(a => [a.full_name, a.email, a.role, a.location, a.portfolio_url ? <a className="underline" rel="noopener noreferrer" target="_blank" href={a.portfolio_url}>Open portfolio <ArrowUpRight className="size-4" aria-hidden="true" /></a> : '—', a.status, a.bio, <span className="flex gap-1.5"><Act onClick={() => appAct(a.id, 'approved')}>Approve</Act><Act cls={soft} onClick={() => appAct(a.id, 'rejected')}>Reject</Act><Act cls={soft} onClick={() => makeProfile(a.id)}>Create profile</Act></span>])} />}</div>
+                </>)}
+                {tab === 'listings' && (<>
+                  <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Marketplace listings</h2><Act onClick={loadListings}>Refresh</Act></div>
+                  <p className="my-2 text-xs text-muted">All active crew listings are published automatically after account identity verification. Remove individual listings that do not meet platform standards. This does not delete the account or booking history.</p>
+                  <div className={cn(card, 'mt-3 p-0')}>{listings && <Table headers={['Listing', 'Account email', 'Category', 'Location', 'Rate / day', 'Status', 'Actions']} rows={listings.map(p => [<><strong>#{p.id} · {p.name}</strong><br />{p.role}</>, p.email || '—', p.category || '—', p.location || '—', '₦' + Number(p.rate || 0).toLocaleString(), p.status === 'approved' && p.is_active ? <Pill k="approved">Published</Pill> : <Pill k="rejected">{p.status === 'removed' ? 'Removed' : p.status || 'Inactive'}</Pill>, p.status === 'approved' && p.is_active ? <Act cls="rounded-[9px] bg-[#b42318] px-3 py-2 text-xs font-bold text-white" onClick={() => removeListing(p.id, p.name, p.role)}>Remove listing</Act> : '—'])} />}</div>
                 </>)}
                 {tab === 'identity' && (<>
                   <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Identity document review</h2><Act onClick={loadIdDocuments}>Refresh</Act></div>
