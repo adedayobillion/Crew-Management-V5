@@ -63,6 +63,22 @@ function Shell() {
     return () => { active = false; stream.close(); };
   }, [user?.id, messagePopupsEnabled, inboxOpen, refreshUnread]);
 
+  // Returning from the hosted checkout: confirm with the server (it re-checks with the gateway) and open the chat.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const state = q.get('pay'), id = q.get('booking');
+    if (!state || !id) return;
+    window.history.replaceState({}, '', window.location.pathname);
+    if (state === 'cancelled') { toast('Payment cancelled. You can pay any time from the chat.'); return; }
+    let tries = 0;
+    const check = async () => {
+      const r = await postJSON('/api/payments/verify', { booking_id: Number(id) }).catch(() => ({ ok: false, data: {} }));
+      if (r.ok && r.data.status === 'verified') { toast('Payment received. Your booking is confirmed and paid.'); return; }
+      if (++tries < 6) setTimeout(check, 4000); else toast('We are still waiting for the payment to clear. This will update on its own.');
+    };
+    check();
+  }, []);
+
   useEffect(() => {
     refreshProfessionals().catch(() => setPros([])).finally(() => setLoading(false));
     http('/api/auth/me').then(({ data }) => setUser(data.user || null)).catch(() => setUser(null));

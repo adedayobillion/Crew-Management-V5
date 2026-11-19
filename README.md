@@ -39,7 +39,7 @@ This package contains the website plus a Node.js/Express API backed by PostgreSQ
 5. Add `CMA_ADMIN_TOKEN` as a long, random secret (needed to use admin API endpoints). Do not put it in the HTML, Git repository, or share it publicly. Generate one locally with `openssl rand -hex 32`.
 6. Add `ID_ENCRYPTION_KEY` as a separate 32-byte encryption key for identity documents. Generate it locally with `openssl rand -hex 32`. Keep a secure backup. Do not commit it or share it. Losing or changing this key without re-encrypting the documents makes existing ID uploads unreadable.
 7. Set `NODE_ENV=production` in Railway Variables so session cookies use the `Secure` flag over HTTPS.
-8. Set `PAYMENTS_ENABLED=false`. Bachs.io checkout and payouts are not connected; this flag does not implement payments.
+8. Payments: set `BACHS_API_KEY`, `BACHS_WEBHOOK_SECRET`, `APP_URL` and `PAYMENTS_ENABLED=true`. In the Bachs dashboard point the webhook at `https://<your-app>/api/payments/webhook`. Keep `PAYMENTS_ENABLED=false` until then.
 9. Do not manually set `PORT` on Railway unless you have a specific reason; Railway injects it.
 10. Deploy. Railway runs `npm start` automatically. Open the generated public domain.
 11. Test `https://YOUR-DOMAIN/api/health`; it should return `ok: true` and `database: "connected"`.
@@ -89,7 +89,7 @@ Booking requests are **not confirmed bookings**. Payment status is `not_configur
 
 - Email verification, password reset, MFA, account deletion, privacy export, and a full admin dashboard are not implemented. Treat this as a test release until those operational features and policies are added. Registration currently establishes a session immediately; verify users before relying on account ownership.
 - The admin API is token protected, but a proper admin UI, token rotation, audit logs, and stronger operational controls are still needed. Sessions expire after seven days; users can log out to revoke their current session.
-- Bachs.io checkout, webhook signature verification, refunds, disputes, and crew payout integration are **not implemented**. Do not set `PAYMENTS_ENABLED=true` as that flag alone does not enable payments.
+- Bachs hosted checkout and signed-webhook settlement are implemented (the server re-reads the session from Bachs and checks status, amount and currency before marking a booking paid). Refunds and crew payouts are still manual from the admin console.
 - Before collecting real money, confirm Bachs sandbox/live credentials and support for marketplace delayed transfers/payouts. A browser redirect is not proof of payment; verified provider webhooks must be the source of truth. Never claim escrow unless both provider and legal arrangements support it.
 - Replace seeded profiles, names, rates, and ratings with verified real data before public launch. Add privacy/terms/cancellation policies and obtain appropriate legal review.
 
@@ -100,7 +100,7 @@ See `.env.example`. Configure these in the Railway **backend service** Variables
 - `DATABASE_URL`: required; use Railway's PostgreSQL variable reference, not a hard-coded credential.
 - `CMA_ADMIN_TOKEN`: required to use the admin API; generate with `openssl rand -hex 32` and keep secret. The app can start without it, but admin endpoints remain disabled.
 - `NODE_ENV=production`: recommended in Railway so session cookies have the `Secure` attribute.
-- `PAYMENTS_ENABLED=false`: keep false. Setting it to true does not implement Bachs.io payments.
+- `PAYMENTS_ENABLED`: `true` enables the Pay button; needs `BACHS_API_KEY` and `BACHS_WEBHOOK_SECRET`.
 - `PORT`: supplied by Railway; usually do not set manually.
 
 ## Legal policy centre

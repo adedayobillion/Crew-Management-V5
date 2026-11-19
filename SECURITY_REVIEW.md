@@ -19,7 +19,7 @@ Review date: 2026-10-19
 - CSP still permits inline scripts because the current page uses inline scripts and event-handler attributes. For a stronger policy, move JavaScript to external files, remove inline event handlers, and remove `unsafe-inline` from `script-src`.
 - Rate limiting currently uses the process-local default store; use a shared store if deploying multiple replicas.
 - There is no email verification, password reset, MFA, full admin dashboard, account deletion/export workflow, or admin audit log.
-- Payment processing, Bachs.io webhook verification, refunds, dispute operations, and real crew payouts are not implemented. Keep `PAYMENTS_ENABLED=false`.
+- Bachs checkout and webhook verification are implemented. Refunds and real crew payouts are still manual.
 - The policy text is a starter template and includes placeholders that must be completed and reviewed by qualified counsel before launch.
 - The sample crew profiles and ratings are illustrative and must not be presented as real or verified professionals.
 

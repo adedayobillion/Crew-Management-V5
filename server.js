@@ -21,7 +21,10 @@ for (const part of String(process.env.CMA_ADMIN_TOKENS || '').split(',')) {
 }
 const SUPPLIER_TIN = process.env.SUPPLIER_TIN || '';
 const PAYMENTS_ENABLED = process.env.PAYMENTS_ENABLED === 'true';
-const WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET || '';
+const BACHS_API_KEY = process.env.BACHS_API_KEY || '';
+const BACHS_WEBHOOK_SECRET = process.env.BACHS_WEBHOOK_SECRET || '';
+const BACHS_BASE = (process.env.BACHS_API_BASE || (BACHS_API_KEY.startsWith('sk_live_') ? 'https://api.bachs.io' : 'https://sandbox-api.bachs.io')).replace(/\/+$/, '');
+const APP_URL = (process.env.APP_URL || '').replace(/\/+$/, '');
 const REQUIRE_APPROVAL = process.env.REQUIRE_ACCOUNT_APPROVAL === 'true'; // true => new accounts start as pending_review
 if (!DATABASE_URL) {
   console.error('DATABASE_URL is missing. Add a Railway PostgreSQL service and attach its DATABASE_URL variable.');
@@ -287,6 +290,8 @@ async function initDb() {
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'text';
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS offer JSONB;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS daily_rate NUMERIC;
+      ALTER TABLE payments ADD COLUMN IF NOT EXISTS checkout_id VARCHAR(255);
+      ALTER TABLE payments ADD COLUMN IF NOT EXISTS checkout_url TEXT;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR(10);
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
@@ -1125,47 +1130,137 @@ app.post('/api/bookings/:id/counter-response', requireUser, wrap(async (req, res
 }));
 
 /* ---------------- payments & invoices ---------------- */
+/* ---------------- payments: Bachs hosted checkout ---------------- */
+async function bachsFetch(method, path, body, idempotencyKey) {
+  const headers = { Authorization: 'Bearer ' + BACHS_API_KEY, Accept: 'application/json' };
+  if (body) headers['Content-Type'] = 'application/json';
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+  let res;
+  try { res = await fetch(BACHS_BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(15000) }); }
+  catch (e) { const err = new Error('Payment provider is unreachable.'); err.status = 502; throw err; }
+  const text = await res.text(); let json = null; try { json = JSON.parse(text); } catch (e) { /* not JSON */ }
+  if (!res.ok) { console.warn('Bachs error', res.status, text.slice(0, 300)); const err = new Error('The payment provider rejected the request.'); err.status = 502; throw err; }
+  return json || {};
+}
+// Mirrors Bachs's documented scheme: HMAC-SHA256 over "<timestamp>.<raw body>", header "t=<unix>,v1=<hex>[,v1=<hex>]"
+// (legacy X-Bachs-Timestamp / X-Bachs-Signature pair also accepted), 300 s replay window, any matching v1 digest wins.
+function verifyBachsSignature(rawBody, headers, secret, toleranceSeconds = 300) {
+  const v2 = headers['x-bachs-signature-v2'];
+  let timestamp, signatures;
+  if (v2 !== undefined) {
+    const fields = String(v2).split(',').map(x => x.trim());
+    const ts = fields.filter(x => x.startsWith('t='));
+    if (ts.length !== 1) return false;
+    timestamp = ts[0].slice(2); signatures = fields.filter(x => x.startsWith('v1=')).map(x => x.slice(3));
+  } else {
+    timestamp = headers['x-bachs-timestamp']; signatures = headers['x-bachs-signature'] ? [String(headers['x-bachs-signature'])] : [];
+  }
+  if (!timestamp || !/^\d+$/.test(String(timestamp))) return false;
+  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > toleranceSeconds) return false;
+  const expected = crypto.createHmac('sha256', secret).update(String(timestamp) + '.', 'utf8').update(rawBody).digest();
+  return signatures.some(sig => /^[a-fA-F0-9]{64}$/.test(sig) && crypto.timingSafeEqual(expected, Buffer.from(sig, 'hex')));
+}
+function collectStrings(value, out = [], depth = 0) {
+  if (depth > 6 || value == null) return out;
+  if (typeof value === 'string') out.push(value);
+  else if (Array.isArray(value)) value.forEach(v => collectStrings(v, out, depth + 1));
+  else if (typeof value === 'object') Object.values(value).forEach(v => collectStrings(v, out, depth + 1));
+  return out;
+}
+
+// Never trust a redirect or a webhook body alone: settle only after re-reading the session from Bachs and checking
+// status, amount and currency against what we asked for.
+async function settleFromBachs(payment) {
+  if (!payment.checkout_id) return { status: payment.status };
+  const session = await bachsFetch('GET', '/v1/checkout-sessions/' + encodeURIComponent(payment.checkout_id));
+  const chargeStatus = session.charge && session.charge.status;
+  const paid = session.status === 'completed' && ['succeeded', 'accepted'].includes(String(chargeStatus || session.payment_status || ''));
+  const dead = ['expired', 'cancelled', 'failed'].includes(String(session.status));
+  if (!paid && !dead) return { status: 'pending' };
+  return withTx(async db => {
+    const cur = (await db.query('SELECT * FROM payments WHERE id = $1 FOR UPDATE', [payment.id])).rows[0];
+    if (cur.status !== 'pending') return { status: cur.status, duplicate: true }; // idempotent
+    if (dead) {
+      await db.query(`UPDATE payments SET status = 'failed', raw_webhook = $2 WHERE id = $1`, [cur.id, JSON.stringify(session)]);
+      await db.query(`UPDATE bookings SET payment_status = 'failed' WHERE id = $1 AND payment_status <> 'paid'`, [cur.booking_id]);
+      return { status: 'failed' };
+    }
+    if (session.amount != null && Math.abs(Number(session.amount) - Number(cur.amount)) > 0.009) { console.error('Bachs amount mismatch', cur.id, session.amount, cur.amount); return { status: 'amount_mismatch' }; }
+    if (session.currency && String(session.currency).toUpperCase() !== 'NGN') { console.error('Bachs currency mismatch', cur.id, session.currency); return { status: 'currency_mismatch' }; }
+    await db.query(`UPDATE payments SET status = 'verified', raw_webhook = $2 WHERE id = $1`, [cur.id, JSON.stringify(session)]);
+    await db.query(`UPDATE bookings SET payment_status = 'paid' WHERE id = $1`, [cur.booking_id]);
+    const total = Number(cur.amount); const subtotal = total / 1.075;
+    const booking = (await db.query('SELECT * FROM bookings WHERE id = $1', [cur.booking_id])).rows[0];
+    await db.query(
+      `INSERT INTO invoices (invoice_number, booking_id, client_name, subtotal, vat_rate, vat_amount, total_amount, supplier_tin) VALUES ($1,$2,$3,$4,7.5,$5,$6,$7) ON CONFLICT (invoice_number) DO NOTHING`,
+      [`INV-${new Date().getUTCFullYear()}-${String(cur.id).padStart(6, '0')}`, cur.booking_id, (booking && booking.client_name) || 'Client', subtotal.toFixed(2), (total - subtotal).toFixed(2), total, SUPPLIER_TIN || null]);
+    const crewId = (await crewUserIdsFor(db, booking.professional_id))[0];
+    const sys = (await db.query(`INSERT INTO messages (booking_id,sender_type,sender_name,masked_content,kind,recipient_user_id) VALUES ($1,'system','System',$2,'system',$3) RETURNING *`,
+      [booking.id, 'Payment received. The booking is confirmed and paid.', crewId || null])).rows[0];
+    return { status: 'verified', booking, sys, crewId };
+  }).then(r => {
+    if (r.sys) {
+      for (const sub of chatSubs.get(r.booking.id) || []) sub.write('data: ' + JSON.stringify(r.sys) + '\n\n');
+      for (const uid of [Number(r.booking.user_id), r.crewId]) if (uid) emitMessageNotification(uid, { type: 'message', booking_id: r.booking.id, reference: r.booking.reference || refFor(r.booking.id), sender_name: 'Payment received', preview: r.sys.masked_content, created_at: r.sys.created_at });
+      afterPayment(r.booking).catch(e => console.warn('afterPayment:', e.message));
+    }
+    return { status: r.status };
+  });
+}
+async function afterPayment() { /* hook for transactional email (added with the email integration) */ }
+
 app.post('/api/payments/initialize', requireUser, wrap(async (req, res) => {
-  if (!PAYMENTS_ENABLED) fail(503, 'Online payments are not available yet.');
+  if (!PAYMENTS_ENABLED || !BACHS_API_KEY) fail(503, 'Online payments are not available yet.');
   const b = await getAccessibleBooking(pool, req, req.body.booking_id);
   if (!ownsBooking(req.user, b)) fail(403, 'Only the client can pay for a booking.');
-  if (['cancelled', 'declined', 'refunded'].includes(b.status)) fail(409, 'This booking cannot be paid.');
+  if (['cancelled', 'declined', 'refunded', 'expired'].includes(b.status)) fail(409, 'This booking cannot be paid.');
   if (!BLOCKING_STATUSES.includes(b.status)) fail(409, 'You can pay once the crew member has accepted this booking.');
   if (b.payment_status === 'paid') fail(409, 'This booking is already paid.');
   const amount = Number(b.client_total);
   if (!(amount > 0)) fail(400, 'This booking has no payable amount.');
+  // Re-use a recent open checkout instead of creating duplicates when the client taps Pay twice.
+  const open = (await pool.query(`SELECT * FROM payments WHERE booking_id = $1 AND status = 'pending' AND checkout_url IS NOT NULL AND amount = $2 AND created_at > NOW() - INTERVAL '25 minutes' ORDER BY id DESC LIMIT 1`, [b.id, amount])).rows[0];
+  if (open) return res.json({ success: true, reference: open.gateway_reference, amount, checkout_url: open.checkout_url });
   const reference = `TXN-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-  await pool.query(`INSERT INTO payments (booking_id, gateway, gateway_reference, amount, status) VALUES ($1,'bachs',$2,$3,'pending')`, [b.id, reference, amount]);
-  res.json({ success: true, reference, amount, checkout_url: `https://checkout.gateway.mock/pay/${reference}` });
+  const base = APP_URL || (req.protocol + '://' + req.get('host'));
+  const ins = await pool.query(`INSERT INTO payments (booking_id, gateway, gateway_reference, amount, currency, status) VALUES ($1,'bachs',$2,$3,'NGN','pending') RETURNING id`, [b.id, reference, amount]);
+  try {
+    const session = await bachsFetch('POST', '/v1/checkout-sessions', {
+      pricing: { currency: 'NGN', amount: amount.toFixed(2), price_type: 'fixed' },
+      customer: { email: req.user.email, name: req.user.name },
+      success_url: base + '/?pay=success&booking=' + b.id,
+      cancel_url: base + '/?pay=cancelled&booking=' + b.id,
+      reference,
+      metadata: { booking_id: b.id, payment_id: ins.rows[0].id, booking_reference: b.reference || refFor(b.id) },
+      expires_in_minutes: 60
+    }, 'crew-' + reference);
+    if (!session.checkout_url || !session.checkout_id) throw Object.assign(new Error('The payment provider returned an incomplete response.'), { status: 502 });
+    await pool.query('UPDATE payments SET checkout_id = $1, checkout_url = $2 WHERE id = $3', [session.checkout_id, session.checkout_url, ins.rows[0].id]);
+    res.json({ success: true, reference, amount, checkout_url: session.checkout_url });
+  } catch (e) {
+    await pool.query(`UPDATE payments SET status = 'failed' WHERE id = $1`, [ins.rows[0].id]);
+    throw e;
+  }
+}));
+
+// Called when the customer comes back from the hosted checkout (and works even if the webhook is delayed).
+app.post('/api/payments/verify', requireUser, wrap(async (req, res) => {
+  const b = await getAccessibleBooking(pool, req, req.body.booking_id);
+  if (b.payment_status === 'paid') return res.json({ success: true, status: 'verified' });
+  const p = (await pool.query(`SELECT * FROM payments WHERE booking_id = $1 AND status = 'pending' ORDER BY id DESC LIMIT 1`, [b.id])).rows[0];
+  if (!p) return res.json({ success: true, status: 'none' });
+  res.json({ success: true, ...(await settleFromBachs(p)) });
 }));
 
 app.post('/api/payments/webhook', wrap(async (req, res) => {
-  if (!WEBHOOK_SECRET) fail(503, 'Payment webhook is not configured.');
-  const given = Buffer.from(String(req.get('x-signature') || ''), 'utf8');
-  const expected = Buffer.from(crypto.createHmac('sha256', WEBHOOK_SECRET).update(req.rawBody || Buffer.alloc(0)).digest('hex'), 'utf8');
-  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) fail(401, 'Invalid signature.');
-  const { gateway_reference, status, raw_payload } = req.body || {};
-  if (!gateway_reference) fail(400, 'gateway_reference is required.');
-  const out = await withTx(async db => {
-    const payment = (await db.query('SELECT * FROM payments WHERE gateway_reference = $1 FOR UPDATE', [String(gateway_reference)])).rows[0];
-    if (!payment) fail(404, 'Payment record not found.');
-    if (payment.status !== 'pending') return { duplicate: true, status: payment.status }; // idempotent: replays do nothing
-    if (status === 'verified') {
-      await db.query(`UPDATE payments SET status = 'verified', raw_webhook = $1 WHERE id = $2`, [JSON.stringify(raw_payload || {}), payment.id]);
-      await db.query(`UPDATE bookings SET payment_status = 'paid' WHERE id = $1`, [payment.booking_id]);
-      const total = Number(payment.amount);
-      const subtotal = total / 1.075;
-      const booking = (await db.query('SELECT client_name FROM bookings WHERE id = $1', [payment.booking_id])).rows[0];
-      await db.query(
-        `INSERT INTO invoices (invoice_number, booking_id, client_name, subtotal, vat_rate, vat_amount, total_amount, supplier_tin) VALUES ($1,$2,$3,$4,7.5,$5,$6,$7) ON CONFLICT (invoice_number) DO NOTHING`,
-        [`INV-${new Date().getUTCFullYear()}-${String(payment.id).padStart(6, '0')}`, payment.booking_id, (booking && booking.client_name) || 'Client', subtotal.toFixed(2), (total - subtotal).toFixed(2), total, SUPPLIER_TIN || null]);
-      return { status: 'verified' };
-    }
-    await db.query(`UPDATE payments SET status = 'failed' WHERE id = $1`, [payment.id]);
-    await db.query(`UPDATE bookings SET payment_status = 'failed' WHERE id = $1 AND payment_status <> 'paid'`, [payment.booking_id]);
-    return { status: 'failed' };
-  });
-  res.json({ success: true, ...out });
+  if (!BACHS_WEBHOOK_SECRET) fail(503, 'Payment webhook is not configured.');
+  if (!req.rawBody || !verifyBachsSignature(req.rawBody, req.headers, BACHS_WEBHOOK_SECRET)) fail(401, 'Invalid signature.');
+  const event = req.body || {};
+  const strings = collectStrings(event.data);
+  if (!strings.length) return res.json({ received: true, ignored: true });
+  const p = (await pool.query(`SELECT * FROM payments WHERE gateway = 'bachs' AND status = 'pending' AND (gateway_reference = ANY($1::text[]) OR checkout_id = ANY($1::text[])) ORDER BY id DESC LIMIT 1`, [strings])).rows[0];
+  if (!p) return res.json({ received: true, ignored: true }); // unrelated or already settled: acknowledge so Bachs stops retrying
+  res.json({ received: true, ...(await settleFromBachs(p)) });
 }));
 
 app.get('/api/invoices/:booking_id', requireUser, wrap(async (req, res) => {
