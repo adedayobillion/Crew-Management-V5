@@ -29,7 +29,7 @@ function Shell() {
     if (!r.ok) return;
     setPros((r.data.professionals || []).map((p, i) => ({
       id: Number(p.id), name: p.name, role: p.role, category: p.category,
-      location: p.location, rate: Number(p.rate), credits: p.credits, desc: p.desc,
+      location: p.location, rate: Number(p.rate), credits: p.credits, desc: p.desc, rating: p.rating == null ? null : Number(p.rating), reviewCount: Number(p.review_count || 0),
       skills: Array.isArray(p.skills) ? p.skills : [], cover: COVERS[i % 6], symbol: SYMBOLS[i % 6]
     })));
   }, []);
