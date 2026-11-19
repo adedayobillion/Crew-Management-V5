@@ -287,6 +287,12 @@ async function initDb() {
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'text';
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS offer JSONB;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS daily_rate NUMERIC;
+      DO $$ BEGIN
+        ALTER TABLE bookings ALTER COLUMN project_location DROP NOT NULL;
+        ALTER TABLE bookings ALTER COLUMN overtime_terms DROP NOT NULL;
+        ALTER TABLE bookings ALTER COLUMN project_brief DROP NOT NULL;
+        ALTER TABLE bookings ALTER COLUMN project_type DROP NOT NULL;
+      EXCEPTION WHEN OTHERS THEN NULL; END $$;
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_user_id INT REFERENCES users(id) ON DELETE SET NULL;
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS recipient_user_id INT REFERENCES users(id) ON DELETE SET NULL;
       CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_user_id, created_at DESC);
@@ -957,8 +963,8 @@ app.post('/api/bookings', requireUser, requireApproved, wrap(async (req, res) =>
     const clash = await db.query(`SELECT 1 FROM availability_blocks WHERE professional_id = $1 AND NOT (end_date < $2 OR start_date > $3) LIMIT 1`, [proId, o.start_date, o.end_date]);
     if (clash.rows.length) fail(409, 'This professional is not available for the requested dates.');
     const ins = await db.query(
-      `INSERT INTO bookings (reference, professional_id, user_id, client_name, client_email, start_date, end_date, project_brief, project_type, booking_unit, daily_rate, client_total, crew_net, status, crew_response)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'General',$9,$10,$11,$12,'awaiting_review','pending') RETURNING *`,
+      `INSERT INTO bookings (reference, professional_id, user_id, client_name, client_email, start_date, end_date, project_brief, project_type, project_location, overtime_terms, booking_unit, daily_rate, client_total, crew_net, status, crew_response)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'General','','',$9,$10,$11,$12,'awaiting_review','pending') RETURNING *`,
       ['TMP-' + crypto.randomBytes(8).toString('hex'), proId, req.user.id, req.user.name, req.user.email, o.start_date, o.end_date, note, o.booking_unit, o.daily_rate, o.client_total, o.crew_net]);
     const row = ins.rows[0]; const ref = refFor(row.id);
     await db.query('UPDATE bookings SET reference = $1 WHERE id = $2', [ref, row.id]);
