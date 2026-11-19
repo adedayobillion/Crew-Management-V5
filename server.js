@@ -1818,7 +1818,7 @@ app.post('/api/crew-applications', requireUser, requireApproved, requireVerified
     try { const u = new URL(portfolio); if (u.protocol !== 'https:') throw 0; portfolio = u.toString(); } catch (e) { fail(400, 'Portfolio must be a valid HTTPS link.'); }
   }
   const result = await withTx(async db => {
-    const existing = (await db.query("SELECT id FROM professionals WHERE user_id = $1", [req.user.id])).rows;
+    const existing = (await db.query("SELECT p.id FROM professionals p JOIN crew_applications ca ON p.application_id = 'app-' || ca.id::text WHERE ca.user_id = $1", [req.user.id])).rows;
     if (existing.length) fail(409, 'You already have a crew profile. Add another listing from your Crew Listing dashboard.');
     const application = (await db.query(
       `INSERT INTO crew_applications (user_id,name,full_name,email,role,location,portfolio,portfolio_url,bio,status)
@@ -1827,10 +1827,10 @@ app.post('/api/crew-applications', requireUser, requireApproved, requireVerified
     const skillsCast = SKILLS_IS_JSON ? 'jsonb' : 'text[]';
     const emptySkills = SKILLS_IS_JSON ? '[]' : [];
     const professional = (await db.query(
-      `INSERT INTO professionals (application_id,user_id,name,role,category,location,bio,"desc",description,showreel,rate,daily_rate,rate_full_day,rate_half_day,skills,verified,status,credits,active,is_active)
+      `INSERT INTO professionals (application_id,name,role,category,location,bio,"desc",description,showreel,rate,daily_rate,rate_full_day,rate_half_day,skills,verified,status,credits,active,is_active)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$7,$9,$10::numeric,$10::numeric,$10::numeric,$11::numeric,$12::${skillsCast},TRUE,'approved','',TRUE,TRUE)
        RETURNING *`,
-      ['app-' + application.id, req.user.id, req.user.name, role, category, location, bio, bio.slice(0,200), portfolio || null, dailyRate, Math.round(dailyRate / 2), emptySkills])).rows[0];
+      ['app-' + application.id, req.user.name, role, category, location, bio, bio.slice(0,200), portfolio || null, dailyRate, Math.round(dailyRate / 2), emptySkills])).rows[0];
     await db.query('UPDATE crew_applications SET professional_id = $1 WHERE id = $2', [professional.id, application.id]);
     return { application: { ...application, status: 'approved', professional_id: professional.id }, professional };
   });
@@ -1969,8 +1969,8 @@ app.patch('/api/admin/bookings/:ref/overtime-agreed', adminGuard, wrap(async (re
 }));
 
 app.get('/api/admin/listings', adminGuard, wrap(async (req, res) => {
-  const { rows } = await pool.query(`SELECT p.id,p.user_id,p.name,p.role,p.category,p.location,p.rate,p.status,p.is_active,p.showreel,p.created_at,u.email
-    FROM professionals p LEFT JOIN users u ON u.id = p.user_id ORDER BY p.created_at DESC LIMIT 500`);
+  const { rows } = await pool.query(`SELECT p.id,ca.user_id,p.name,p.role,p.category,p.location,p.rate,p.status,p.is_active,p.showreel,p.created_at,ca.email
+    FROM professionals p LEFT JOIN crew_applications ca ON p.application_id = 'app-' || ca.id::text ORDER BY p.created_at DESC LIMIT 500`);
   res.json({ listings: rows });
 }));
 app.delete('/api/admin/listings/:id', adminGuard, wrap(async (req, res) => {
