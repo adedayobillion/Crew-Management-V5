@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Field, inputCls } from './ui.jsx';
 import { http, postJSON, todayLagos } from './lib.js';
-import { ExternalLink, Plus, Pencil, Check, X } from 'lucide-react';
+import { ExternalLink, Plus, Pencil } from 'lucide-react';
 
 const CATEGORIES = ['Camera', 'Production', 'Editing', 'Lighting', 'Sound', 'Creative'];
 const panel = 'rounded-2xl border border-line bg-white p-5';
