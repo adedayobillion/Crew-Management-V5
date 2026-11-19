@@ -336,12 +336,34 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
 
   useEffect(() => {
     if (!open) return;
+    // Keep the page behind the inbox stationary, especially on iOS Safari.
+    const scrollY = window.scrollY;
+    const body = document.body;
+    const previous = {
+      position: body.style.position,
+      top: body.style.top,
+      left: body.style.left,
+      right: body.style.right,
+      width: body.style.width,
+      overflow: body.style.overflow
+    };
+    body.style.position = 'fixed';
+    body.style.top = `-${scrollY}px`;
+    body.style.left = '0';
+    body.style.right = '0';
+    body.style.width = '100%';
+    body.style.overflow = 'hidden';
+
     setSelected(null);
     setMessages([]);
     loadThreads();
     const stream = new EventSource('/api/messages/stream');
     stream.onmessage = () => loadThreads();
-    return () => stream.close();
+    return () => {
+      stream.close();
+      Object.assign(body.style, previous);
+      window.scrollTo(0, scrollY);
+    };
   }, [open, loadThreads]);
 
   useEffect(() => {
@@ -443,14 +465,14 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
   return (
     <AnimatePresence>
       {open && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[90] flex items-center justify-center bg-[#0b142280] p-3 backdrop-blur-sm" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
-          <motion.section initial={{ y: 24, opacity: 0, scale: .98 }} animate={{ y: 0, opacity: 1, scale: 1 }} exit={{ y: 16, opacity: 0 }} className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[90] flex items-stretch justify-center overflow-hidden bg-[#0b142280] backdrop-blur-sm sm:items-center sm:p-3" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+          <motion.section initial={{ y: 24, opacity: 0, scale: .98 }} animate={{ y: 0, opacity: 1, scale: 1 }} exit={{ y: 16, opacity: 0 }} className="flex h-[100dvh] max-h-[100dvh] w-full min-h-0 max-w-5xl flex-col overflow-hidden rounded-none bg-white shadow-2xl sm:h-[90dvh] sm:max-h-[90dvh] sm:rounded-2xl">
             <header className="flex items-center justify-between border-b border-line px-4 py-3 sm:px-5">
               <div><Tagline>Account inbox</Tagline><h2 className="font-display text-xl font-extrabold">Messages</h2></div>
               <Button size="sm" variant="ghost" onClick={onClose}>Close</Button>
             </header>
-            <div className="grid min-h-0 flex-1 md:grid-cols-[300px_1fr]">
-              <aside className="max-h-[32vh] overflow-y-auto border-b border-line md:max-h-none md:border-b-0 md:border-r">
+            <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden md:grid-rows-1 md:grid-cols-[300px_minmax(0,1fr)]">
+              <aside className="max-h-[28dvh] min-h-0 overflow-y-auto overscroll-contain border-b border-line [touch-action:pan-y] [-webkit-overflow-scrolling:touch] md:max-h-none md:border-b-0 md:border-r">
                 {!threads.length ? <p className="p-5 text-xs text-muted">No booking conversations yet.</p> : threads.map(thread => (
                   <button key={thread.id} type="button" onClick={() => openThread(thread)} className={'block w-full border-b border-line p-4 text-left transition hover:bg-[#f7f9f2] ' + (selected?.id === thread.id ? 'bg-[#f1f5e9]' : '')}>
                     <div className="flex items-center justify-between gap-2"><strong className="text-sm">{thread.my_role === 'client' ? (thread.professional_name || 'Crew member') : (thread.client_name || 'Client')}</strong>{Number(thread.unread_count) > 0 && <span className="rounded-full bg-lime px-2 py-0.5 text-[10px] font-extrabold">{thread.unread_count}</span>}</div>
@@ -459,7 +481,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                   </button>
                 ))}
               </aside>
-              <section className="flex min-h-0 flex-1 flex-col">
+              <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                 {!selected ? <div className="grid flex-1 place-items-center p-6 text-sm text-muted">Choose a booking conversation.</div> : (
                   <>
                     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-line px-4 py-3">
@@ -471,7 +493,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                         {OPEN_STATES.includes(current.status) && current.payment_status !== 'paid' && <Button size="sm" variant="ghost" onClick={openPropose}><CalendarClock className="size-4" aria-hidden="true" />Change dates or price</Button>}
                       </div>
                     </div>
-                    <div className="flex-1 space-y-2 overflow-y-auto bg-[#f7f9f6] p-4">
+                    <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain bg-[#f7f9f6] p-4 [touch-action:pan-y] [-webkit-overflow-scrolling:touch]">
                       {messages.map(message => {
                         if (message.kind === 'system') return <p key={message.id} className="mx-auto w-fit max-w-[90%] rounded-full bg-[#e8ecef] px-3 py-1 text-center text-[11px] text-[#445468]">{message.masked_content}</p>;
                         if (message.kind === 'request' || message.kind === 'offer') return <div key={message.id} className="flex flex-col"><span className={'mb-0.5 text-[10px] text-muted ' + (message.offer?.proposed_by === current.my_role ? 'text-right' : '')}>{message.offer?.proposed_by === current.my_role ? 'You' : message.sender_name}</span><OfferCard message={message} thread={current} busy={busy} onRespond={respondToOffer} /></div>;
