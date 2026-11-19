@@ -1799,44 +1799,42 @@ app.post('/api/team-bookings', requireUser, requireApproved, wrap(async (req, re
 
 /* ---------------- crew applications ---------------- */
 app.post('/api/crew-applications', requireUser, requireApproved, requireVerifiedEmail, wrap(async (req, res) => {
-  // Identity verification is required before a crew application can be submitted.
-  // Check the database rather than trusting a possibly stale client-side user object.
-  const identity = await pool.query('SELECT is_verified FROM users WHERE id = $1', [req.user.id]);
-  if (!identity.rows[0]?.is_verified) {
-    return res.status(403).json({
-      error: 'Please upload your identity document in your Profile for verification before applying as a crew member. Your application can be submitted once an administrator approves it.',
-      code: 'identity_verification_required'
-    });
-  }
+  // Account approval + identity verification are the publishing gate. New listings
+  // are published immediately; administrators can remove them from the marketplace.
+  const identity = (await pool.query('SELECT is_verified FROM users WHERE id = $1', [req.user.id])).rows[0];
+  if (!identity?.is_verified) fail(403, 'Please complete identity verification in your Profile before creating a public listing.');
   const role = str(req.body.role, 120);
   const location = str(req.body.location, 120);
   let portfolio = str(req.body.portfolio, 500);
   const bio = str(req.body.bio, 2000);
-  if (!role) fail(400, 'Please enter your role.');
+  const dailyRate = Math.round(Number(req.body.dailyRate));
+  const category = CATEGORIES.find(c => c.toLowerCase() === role.toLowerCase()) || (['makeup', 'other'].includes(role.toLowerCase()) ? 'Creative' : null);
+  if (!role) fail(400, 'Please choose your primary role.');
   if (!location) fail(400, 'Please enter your location.');
+  if (!category) fail(400, 'Choose a valid crew category.');
+  if (!Number.isFinite(dailyRate) || dailyRate < 1000 || dailyRate > 10000000) fail(400, 'Enter a daily rate between ₦1,000 and ₦10,000,000.');
   if (portfolio) {
     if (!/^https?:\/\//i.test(portfolio)) portfolio = 'https://' + portfolio;
-    try { const u = new URL(portfolio); if (!/^https?:$/.test(u.protocol)) throw 0; portfolio = u.toString(); } catch (e) { fail(400, 'Portfolio must be a valid web link.'); }
+    try { const u = new URL(portfolio); if (u.protocol !== 'https:') throw 0; portfolio = u.toString(); } catch (e) { fail(400, 'Portfolio must be a valid HTTPS link.'); }
   }
-  const dup = await pool.query(`SELECT id FROM crew_applications WHERE user_id = $1 AND status = 'pending'`, [req.user.id]);
-  if (dup.rows.length) fail(409, 'You already have an application under review (#' + dup.rows[0].id + ').');
-  const { rows } = await pool.query(
-    `INSERT INTO crew_applications
-     (user_id, name, full_name, email, role, location, portfolio, portfolio_url, bio)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-     RETURNING *`,
-    [
-      req.user.id,
-      req.user.name,
-      req.user.name,
-      req.user.email,
-      role,
-      location,
-      portfolio || '',
-      portfolio || '',
-      bio
-    ]);
-  res.status(201).json({ success: true, application: rows[0] });
+  const result = await withTx(async db => {
+    const existing = (await db.query("SELECT id FROM professionals WHERE user_id = $1", [req.user.id])).rows;
+    if (existing.length) fail(409, 'You already have a crew profile. Add another listing from your Crew Listing dashboard.');
+    const application = (await db.query(
+      `INSERT INTO crew_applications (user_id,name,full_name,email,role,location,portfolio,portfolio_url,bio,status)
+       VALUES ($1,$2,$2,$3,$4,$5,$6,$6,$7,'approved') RETURNING *`,
+      [req.user.id, req.user.name, req.user.email, role, location, portfolio || '', bio])).rows[0];
+    const skillsCast = SKILLS_IS_JSON ? 'jsonb' : 'text[]';
+    const emptySkills = SKILLS_IS_JSON ? '[]' : [];
+    const professional = (await db.query(
+      `INSERT INTO professionals (application_id,user_id,name,role,category,location,bio,"desc",description,showreel,rate,daily_rate,rate_full_day,rate_half_day,skills,verified,status,credits,active,is_active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$7,$9,$10::numeric,$10::numeric,$10::numeric,$11::numeric,$12::${skillsCast},TRUE,'approved','',TRUE,TRUE)
+       RETURNING *`,
+      ['app-' + application.id, req.user.id, req.user.name, role, category, location, bio, bio.slice(0,200), portfolio || null, dailyRate, Math.round(dailyRate / 2), emptySkills])).rows[0];
+    await db.query('UPDATE crew_applications SET professional_id = $1 WHERE id = $2', [professional.id, application.id]);
+    return { application: { ...application, status: 'approved', professional_id: professional.id }, professional };
+  });
+  res.status(201).json({ success: true, application: result.application, listing: listingView(result.professional) });
 }));
 
 /* ---------------- admin API (x-admin-token) ---------------- */
@@ -1966,6 +1964,24 @@ app.patch('/api/admin/bookings/:ref/overtime-agreed', adminGuard, wrap(async (re
     const b = await findBookingByRef(db, req.params.ref);
     await db.query('UPDATE bookings SET overtime_agreed = $1 WHERE id = $2', [req.body.agreed, b.id]);
     await audit(db, req, 'overtime_agreed', { id: b.user_id, name: b.client_name, email: b.client_email }, { reference: b.reference || refFor(b.id), status: req.body.agreed ? 'agreed' : 'not agreed' });
+  });
+  res.json({ success: true });
+}));
+
+app.get('/api/admin/listings', adminGuard, wrap(async (req, res) => {
+  const { rows } = await pool.query(`SELECT p.id,p.user_id,p.name,p.role,p.category,p.location,p.rate,p.status,p.is_active,p.showreel,p.created_at,u.email
+    FROM professionals p LEFT JOIN users u ON u.id = p.user_id ORDER BY p.created_at DESC LIMIT 500`);
+  res.json({ listings: rows });
+}));
+app.delete('/api/admin/listings/:id', adminGuard, wrap(async (req, res) => {
+  const id = toInt(req.params.id); if (!id) fail(400, 'Invalid listing id.');
+  await withTx(async db => {
+    const p = (await db.query('SELECT id,user_id,name,role FROM professionals WHERE id = $1 FOR UPDATE', [id])).rows[0];
+    if (!p) fail(404, 'Listing not found.');
+    // Keep the record and booking history, but remove it from all public marketplace queries.
+    await db.query("UPDATE professionals SET status = 'removed', active = FALSE, is_active = FALSE WHERE id = $1", [id]);
+    await db.query('DELETE FROM professional_photos WHERE professional_id = $1', [id]);
+    await audit(db, req, 'listing_removed', { id: p.user_id, name: p.name }, { reference: '#' + id, status: 'removed', role: p.role });
   });
   res.json({ success: true });
 }));
