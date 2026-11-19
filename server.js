@@ -303,6 +303,12 @@ async function initDb() {
         used_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+      CREATE TABLE IF NOT EXISTS professional_photos (
+        professional_id INT PRIMARY KEY REFERENCES professionals(id) ON DELETE CASCADE,
+        mime TEXT NOT NULL,
+        data BYTEA NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
       ALTER TABLE payments ADD COLUMN IF NOT EXISTS checkout_id VARCHAR(255);
       ALTER TABLE payments ADD COLUMN IF NOT EXISTS checkout_url TEXT;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR(10);
@@ -1045,6 +1051,95 @@ async function getAccessibleBooking(db, req, rawId) {
 
 /* ---------------- public API ---------------- */
 app.get('/api/health', (req, res) => res.json({ ok: true, version: '2.4.0' }));
+
+/* ---------------- crew self-service: listing, photo, personal unavailability ---------------- */
+async function myListing(db, user) {
+  const ids = await crewProfessionalIds(db, user);
+  if (!ids.length) fail(404, 'You do not have a published crew profile yet.');
+  return (await db.query('SELECT * FROM professionals WHERE id = $1', [ids[0]])).rows[0];
+}
+const isoDate = v => { const x = String(v || ''); if (!/^\d{4}-\d{2}-\d{2}$/.test(x)) return null; const d = new Date(x + 'T00:00:00Z'); return !isNaN(d) && d.toISOString().slice(0, 10) === x ? x : null; };
+const listingView = p => ({ id: p.id, role: p.role, category: p.category || '', location: p.location || '', bio: p.bio || '', skills: p.skills || [], showreel: p.showreel || '', rate: Number(p.rate) || 0, photo: p.photo || '', is_active: p.is_active !== false, status: p.status });
+app.get('/api/crew/listing', requireUser, wrap(async (req, res) => {
+  const p = await myListing(pool, req.user);
+  const blocks = (await pool.query(`SELECT id, start_date::text AS start_date, end_date::text AS end_date, reason FROM availability_blocks WHERE professional_id = $1 AND end_date >= $2::date ORDER BY start_date`, [p.id, todayLagos()])).rows;
+  res.json({ listing: listingView(p), blocks });
+}));
+app.patch('/api/crew/listing', requireUser, wrap(async (req, res) => {
+  const p = await myListing(pool, req.user), b = req.body || {}, sets = [], vals = [];
+  const add = (col, cast, v) => { vals.push(v); sets.push(`${col} = $${vals.length}::${cast}`); };
+  if (b.role !== undefined) { const v = str(b.role, 80); if (v.length < 2) fail(400, 'Enter your role, for example Director of Photography.'); add('role', 'text', v); }
+  if (b.category !== undefined) add('category', 'text', str(b.category, 60) || null);
+  if (b.bio !== undefined) { add('bio', 'text', str(b.bio, 1000) || null); }
+  if (b.rate !== undefined) {
+    const r = Math.round(Number(b.rate));
+    if (!Number.isFinite(r) || r < 1000 || r > 10000000) fail(400, 'Enter a daily rate between ₦1,000 and ₦10,000,000.');
+    add('rate', 'numeric', r); add('daily_rate', 'numeric', r); add('rate_full_day', 'numeric', r); // existing bookings keep the rate they were agreed at
+  }
+  if (b.skills !== undefined) {
+    const list = (Array.isArray(b.skills) ? b.skills : String(b.skills).split(',')).map(x => str(x, 40)).filter(Boolean);
+    if (list.length > 15) fail(400, 'Add at most 15 skills.');
+    add('skills', 'text[]', [...new Set(list)]);
+  }
+  if (b.showreel !== undefined) {
+    const v = str(b.showreel, 300);
+    if (v) { let u; try { u = new URL(v); } catch (e) { fail(400, 'Enter the full showreel link, starting with https://'); } if (u.protocol !== 'https:') fail(400, 'The showreel link must start with https://'); }
+    add('showreel', 'text', v || null);
+  }
+  if (b.is_active !== undefined) { add('is_active', 'boolean', !!b.is_active); add('active', 'boolean', !!b.is_active); }
+  if (!sets.length) fail(400, 'Nothing to update.');
+  vals.push(p.id);
+  const row = (await pool.query(`UPDATE professionals SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING *`, vals)).rows[0];
+  res.json({ success: true, listing: listingView(row) });
+}));
+const PHOTO_TYPES = { 'image/jpeg': b => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff, 'image/png': b => b.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])), 'image/webp': b => b.subarray(0, 4).toString('ascii') === 'RIFF' && b.subarray(8, 12).toString('ascii') === 'WEBP' };
+app.post('/api/crew/photo', requireUser, wrap(async (req, res) => {
+  const p = await myListing(pool, req.user);
+  const mime = str(req.body.mime_type, 40).toLowerCase(), b64 = String(req.body.data_base64 || '');
+  if (!PHOTO_TYPES[mime]) fail(400, 'Upload a JPG, PNG or WebP photo.');
+  if (!b64 || b64.length > 3 * 1024 * 1024 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) fail(400, 'The photo is empty, invalid or larger than 2 MB.');
+  const bytes = Buffer.from(b64, 'base64');
+  if (bytes.length < 12 || bytes.length > 2 * 1024 * 1024 || !PHOTO_TYPES[mime](bytes)) fail(400, 'The file is not a valid ' + mime.split('/')[1].toUpperCase() + ' photo under 2 MB.');
+  await withTx(async db => {
+    await db.query(`INSERT INTO professional_photos (professional_id, mime, data) VALUES ($1,$2,$3) ON CONFLICT (professional_id) DO UPDATE SET mime = EXCLUDED.mime, data = EXCLUDED.data, updated_at = NOW()`, [p.id, mime, bytes]);
+    await db.query('UPDATE professionals SET photo = $1::text WHERE id = $2', [`/api/professionals/${p.id}/photo?v=${Date.now()}`, p.id]);
+  });
+  res.json({ success: true, photo: `/api/professionals/${p.id}/photo?v=${Date.now()}` });
+}));
+app.delete('/api/crew/photo', requireUser, wrap(async (req, res) => {
+  const p = await myListing(pool, req.user);
+  await pool.query('DELETE FROM professional_photos WHERE professional_id = $1', [p.id]);
+  await pool.query('UPDATE professionals SET photo = NULL WHERE id = $1', [p.id]);
+  res.json({ success: true });
+}));
+app.get('/api/professionals/:id/photo', wrap(async (req, res) => {
+  const id = toInt(req.params.id); if (!id) fail(404, 'Not found.');
+  const r = (await pool.query(`SELECT ph.mime, ph.data FROM professional_photos ph JOIN professionals p ON p.id = ph.professional_id WHERE ph.professional_id = $1 AND p.status = 'approved'`, [id])).rows[0];
+  if (!r) fail(404, 'Not found.');
+  res.set({ 'Content-Type': r.mime, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'public, max-age=300', 'Content-Security-Policy': "default-src 'none'" }).send(r.data);
+}));
+app.post('/api/crew/availability', requireUser, wrap(async (req, res) => {
+  const start = isoDate(req.body.start_date), end = isoDate(req.body.end_date || req.body.start_date);
+  if (!start || !end) fail(400, 'Choose valid dates.');
+  if (start < todayLagos()) fail(400, 'You cannot block dates in the past.');
+  if (end < start) fail(400, 'The end date cannot be before the start date.');
+  if ((new Date(end) - new Date(start)) / 86400000 > 365) fail(400, 'Block at most one year at a time.');
+  const row = await withTx(async db => {
+    const p = await myListing(db, req.user);
+    await db.query('SELECT id FROM professionals WHERE id = $1 FOR UPDATE', [p.id]); // serialise with new bookings
+    if ((await db.query(`SELECT COUNT(*)::int AS n FROM availability_blocks WHERE professional_id = $1 AND reason = 'personal' AND end_date >= $2::date`, [p.id, todayLagos()])).rows[0].n >= 100) fail(400, 'You have too many blocked periods. Remove some first.');
+    if ((await db.query(`SELECT 1 FROM availability_blocks WHERE professional_id = $1 AND reason <> 'personal' AND NOT (end_date < $2::date OR start_date > $3::date) LIMIT 1`, [p.id, start, end])).rowCount) fail(409, 'You already have a confirmed booking on some of these dates.');
+    return (await db.query(`INSERT INTO availability_blocks (professional_id, start_date, end_date, reason) VALUES ($1,$2::date,$3::date,'personal') RETURNING id, start_date::text AS start_date, end_date::text AS end_date, reason`, [p.id, start, end])).rows[0];
+  });
+  res.status(201).json({ success: true, block: row });
+}));
+app.delete('/api/crew/availability/:id', requireUser, wrap(async (req, res) => {
+  const id = toInt(req.params.id); if (!id) fail(400, 'Invalid id.');
+  const p = await myListing(pool, req.user);
+  const d = await pool.query(`DELETE FROM availability_blocks WHERE id = $1 AND professional_id = $2 AND reason = 'personal' RETURNING id`, [id, p.id]);
+  if (!d.rowCount) fail(404, 'Blocked period not found. Dates held by bookings cannot be removed here.');
+  res.json({ success: true });
+}));
 
 app.get('/api/professionals', wrap(async (req, res) => {
   const { role, location, category } = req.query;
