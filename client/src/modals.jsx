@@ -7,14 +7,23 @@ import { ArrowUpRight } from 'lucide-react';
 
 /* ================= Auth ================= */
 export function AuthModal({ open, mode, setMode, defaultRole, onClose, onSuccess, openLegal }) {
-  const reg = mode === 'register';
+  const reg = mode === 'register', forgot = mode === 'forgot';
+  const [sent, setSent] = useState('');
   const [f, setF] = useState({ name: '', email: '', password: '', role: 'client', terms: false });
   const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
   const first = useRef(null);
-  useEffect(() => { if (open) { setErr(''); setF(s => ({ ...s, role: defaultRole || 'client' })); setTimeout(() => first.current?.focus(), 120); } }, [open, mode]);
+  useEffect(() => { if (open) { setErr(''); setSent(''); setF(s => ({ ...s, role: defaultRole || 'client' })); setTimeout(() => first.current?.focus(), 120); } }, [open, mode]);
   const set = k => e => setF(s => ({ ...s, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
   async function submit(e) {
     e.preventDefault(); setErr(''); setBusy(true);
+    if (forgot) {
+      try {
+        const { ok, data } = await postJSON('/api/auth/forgot', { email: f.email });
+        if (!ok) throw new Error(data.error || 'Could not send the reset email.');
+        setSent(data.message || 'If that email has an account, a reset link is on its way.');
+      } catch (e2) { setErr(e2.message); } finally { setBusy(false); }
+      return;
+    }
     const payload = reg ? { name: f.name, email: f.email, password: f.password, accountType: f.role, termsAccepted: f.terms } : { email: f.email, password: f.password };
     try {
       const { ok, data } = await postJSON('/api/auth/' + mode, payload);
@@ -27,9 +36,9 @@ export function AuthModal({ open, mode, setMode, defaultRole, onClose, onSuccess
     <Modal open={open} onClose={onClose} labelledBy="authTitle" className="sm:max-w-[470px] sm:p-8">
       <motion.div initial={{ rotate: -12, scale: 0.8 }} animate={{ rotate: 0, scale: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 14, delay: 0.1 }}
         className="mb-4 grid size-[46px] place-items-center rounded-[15px] bg-lime font-display text-[22px] font-extrabold shadow-[0_6px_16px_#8ebc4655]">C.</motion.div>
-      <ModalHead tag="Your production network" id="authTitle" title={reg ? 'Create your account' : 'Welcome back'} onClose={onClose} />
-      <p className="-mt-3 mb-4 text-[13px] text-muted">{reg ? 'One account to hire crew and offer your own services. Switch between Hiring and Crew any time.' : 'Sign in to manage your bookings and your crew profile.'}</p>
-      <SlidingTabs id="authTabs" value={mode} onChange={setMode} tabs={[{ value: 'login', label: 'Log in' }, { value: 'register', label: 'Create account' }]} className="mb-4" />
+      <ModalHead tag="Your production network" id="authTitle" title={reg ? 'Create your account' : forgot ? 'Reset your password' : 'Welcome back'} onClose={onClose} />
+      <p className="-mt-3 mb-4 text-[13px] text-muted">{reg ? 'One account to hire crew and offer your own services. Switch between Hiring and Crew any time.' : forgot ? 'Enter your account email and we will send you a link to choose a new password.' : 'Sign in to manage your bookings and your crew profile.'}</p>
+      {!forgot && <SlidingTabs id="authTabs" value={mode} onChange={setMode} tabs={[{ value: 'login', label: 'Log in' }, { value: 'register', label: 'Create account' }]} className="mb-4" />}
       <form onSubmit={submit} className="grid gap-3.5">
         <AnimatePresence initial={false}>
           {reg && (
@@ -39,7 +48,8 @@ export function AuthModal({ open, mode, setMode, defaultRole, onClose, onSuccess
           )}
         </AnimatePresence>
         <Field label="Email address" htmlFor="authEmail"><input ref={reg ? null : first} id="authEmail" type="email" className={inputCls} required value={f.email} onChange={set('email')} autoComplete="email" maxLength={254} placeholder="you@example.com" /></Field>
-        <Field label="Password" htmlFor="authPassword"><input id="authPassword" type="password" className={inputCls} required minLength={10} maxLength={200} value={f.password} onChange={set('password')} autoComplete={reg ? 'new-password' : 'current-password'} placeholder={reg ? 'At least 10 characters, with a letter and number' : 'Your password'} /></Field>
+        {!forgot && <Field label="Password" htmlFor="authPassword"><input id="authPassword" type="password" className={inputCls} required minLength={10} maxLength={200} value={f.password} onChange={set('password')} autoComplete={reg ? 'new-password' : 'current-password'} placeholder={reg ? 'At least 10 characters, with a letter and number' : 'Your password'} /></Field>}
+        {!reg && !forgot && <button type="button" onClick={() => setMode('forgot')} className="-mt-1.5 justify-self-start text-xs font-bold text-[#526f1f] underline">Forgot your password?</button>}
         <AnimatePresence initial={false}>
           {reg && (
             <motion.div key="r" initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="grid gap-3.5 overflow-hidden">
@@ -51,9 +61,33 @@ export function AuthModal({ open, mode, setMode, defaultRole, onClose, onSuccess
           )}
         </AnimatePresence>
         <AnimatePresence>{err && <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} role="alert" className="rounded-[10px] border border-[#f6d5d5] bg-[#fff0f0] px-3 py-2.5 text-xs text-[#a13232]">{err}</motion.div>}</AnimatePresence>
-        <Button variant="dark" type="submit" disabled={busy} className="w-full">{busy ? (reg ? 'Creating account…' : 'Signing in…') : (reg ? <>Create account securely <ArrowUpRight className="size-4" aria-hidden="true" /></> : <>Log in securely <ArrowUpRight className="size-4" aria-hidden="true" /></>)}</Button>
+        {sent && <div role="status" className="rounded-[10px] border border-[#cfe6b0] bg-[#f3fae6] px-3 py-2.5 text-xs text-[#3f6b12]">{sent}</div>}
+        <Button variant="dark" type="submit" disabled={busy} className="w-full">{forgot ? (busy ? 'Sending…' : 'Email me a reset link') : busy ? (reg ? 'Creating account…' : 'Signing in…') : (reg ? <>Create account securely <ArrowUpRight className="size-4" aria-hidden="true" /></> : <>Log in securely <ArrowUpRight className="size-4" aria-hidden="true" /></>)}</Button>
+        {forgot && <button type="button" onClick={() => setMode('login')} className="text-center text-xs font-bold text-[#526f1f] underline">Back to log in</button>}
       </form>
       <p className="mt-4 text-center text-[11px] leading-relaxed text-muted">Your account is protected with a hashed password and a secure, HTTP-only session cookie. Use a unique password for this platform.</p>
+    </Modal>
+  );
+}
+
+export function ResetModal({ token, onClose, onDone }) {
+  const [pw, setPw] = useState(''); const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
+  async function submit(e) {
+    e.preventDefault(); setErr(''); setBusy(true);
+    try {
+      const { ok, data } = await postJSON('/api/auth/reset', { token, password: pw });
+      if (!ok) throw new Error(data.error || 'Could not reset your password.');
+      onDone();
+    } catch (e2) { setErr(e2.message); } finally { setBusy(false); }
+  }
+  return (
+    <Modal open={!!token} onClose={onClose} labelledBy="resetTitle" className="sm:max-w-[440px] sm:p-8">
+      <ModalHead tag="Account recovery" id="resetTitle" title="Choose a new password" onClose={onClose} />
+      <form onSubmit={submit} className="grid gap-3.5">
+        <Field label="New password" htmlFor="resetPw"><input id="resetPw" type="password" className={inputCls} required minLength={10} maxLength={200} value={pw} onChange={e => setPw(e.target.value)} autoComplete="new-password" placeholder="At least 10 characters, with a letter and number" /></Field>
+        {err && <div role="alert" className="rounded-[10px] border border-[#f6d5d5] bg-[#fff0f0] px-3 py-2.5 text-xs text-[#a13232]">{err}</div>}
+        <Button variant="dark" type="submit" disabled={busy} className="w-full">{busy ? 'Saving…' : 'Save new password'}</Button>
+      </form>
     </Modal>
   );
 }

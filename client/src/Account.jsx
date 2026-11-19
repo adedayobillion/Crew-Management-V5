@@ -19,7 +19,10 @@ const reviewStyles = {
 };
 const panel = 'rounded-[18px] border border-line bg-white p-5 shadow-[0_8px_30px_#17233708]';
 
-export function ProfilePage({ user, onBack, onUserUpdated, onSettingsUpdated }) {
+export function ProfilePage({ user, onBack, onUserUpdated, onSettingsUpdated, onSignedOut }) {
+  const [pw, setPw] = useState({ current: '', next: '' });
+  const [delPw, setDelPw] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [profile, setProfile] = useState(null);
   const [settings, setSettings] = useState({ message_popups: true, email_notifications: true, profile_visibility: true });
   const [documents, setDocuments] = useState([]);
@@ -53,6 +56,18 @@ export function ProfilePage({ user, onBack, onUserUpdated, onSettingsUpdated }) 
 
   useEffect(() => { load(); }, [load]);
 
+  async function changePassword(e) {
+    e.preventDefault();
+    const r = await postJSON('/api/auth/change-password', { current: pw.current, password: pw.next }).catch(() => ({ ok: false, data: {} }));
+    if (r.ok) { setPw({ current: '', next: '' }); setNotice({ text: 'Password changed. Other devices have been signed out.', error: false }); }
+    else setNotice({ text: r.data.error || 'Could not change your password.', error: true });
+  }
+  async function deleteAccount(e) {
+    e.preventDefault();
+    const r = await postJSON('/api/account/delete', { password: delPw }).catch(() => ({ ok: false, data: {} }));
+    if (r.ok) onSignedOut?.();
+    else setNotice({ text: r.data.error || 'Could not delete your account.', error: true });
+  }
   async function saveProfile(e) {
     e.preventDefault();
     setSaving(true);
@@ -158,6 +173,24 @@ export function ProfilePage({ user, onBack, onUserUpdated, onSettingsUpdated }) 
                   </label>
                 ))}
               </div>
+            </section>
+            <section className={panel}>
+              <h2 className="font-display text-xl font-extrabold">Password</h2>
+              <form onSubmit={changePassword} className="mt-3 grid gap-3 sm:grid-cols-2">
+                <Field label="Current password" htmlFor="pwCurrent"><input id="pwCurrent" type="password" className={inputCls} required maxLength={200} autoComplete="current-password" value={pw.current} onChange={e => setPw(v => ({ ...v, current: e.target.value }))} /></Field>
+                <Field label="New password" htmlFor="pwNew"><input id="pwNew" type="password" className={inputCls} required minLength={10} maxLength={200} autoComplete="new-password" value={pw.next} onChange={e => setPw(v => ({ ...v, next: e.target.value }))} placeholder="10+ characters, letter and number" /></Field>
+                <div className="sm:col-span-2"><Button type="submit">Change password</Button></div>
+              </form>
+            </section>
+            <section className={panel + ' border-[#f3d1d1]'}>
+              <h2 className="font-display text-xl font-extrabold text-[#a13232]">Delete account</h2>
+              <p className="mt-1 text-xs text-muted">Your name, contact details and ID documents are erased and your crew profile is unlisted. Past bookings and invoices are kept for the other person and for tax records. You cannot delete while a booking is confirmed or in progress.</p>
+              {!confirmDelete ? <div className="mt-3"><Button variant="ghost" onClick={() => setConfirmDelete(true)}>Delete my account</Button></div> : (
+                <form onSubmit={deleteAccount} className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                  <Field label="Confirm with your password" htmlFor="delPw"><input id="delPw" type="password" className={inputCls} required autoComplete="current-password" value={delPw} onChange={e => setDelPw(e.target.value)} /></Field>
+                  <Button type="submit">Permanently delete</Button>
+                </form>
+              )}
             </section>
           </div>
           <div className="grid content-start gap-4">

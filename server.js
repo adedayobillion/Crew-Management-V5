@@ -25,6 +25,10 @@ const BACHS_API_KEY = process.env.BACHS_API_KEY || '';
 const BACHS_WEBHOOK_SECRET = process.env.BACHS_WEBHOOK_SECRET || '';
 const BACHS_BASE = (process.env.BACHS_API_BASE || (BACHS_API_KEY.startsWith('sk_live_') ? 'https://api.bachs.io' : 'https://sandbox-api.bachs.io')).replace(/\/+$/, '');
 const APP_URL = (process.env.APP_URL || '').replace(/\/+$/, '');
+const SENDBYTE_API_KEY = process.env.SENDBYTE_API_KEY || '';
+const SENDBYTE_BASE = (process.env.SENDBYTE_API_BASE || 'https://api.sendbyte.africa').replace(/\/+$/, '');
+const MAIL_FROM = process.env.MAIL_FROM || '';
+const EMAIL_ENABLED = !!(SENDBYTE_API_KEY && MAIL_FROM);
 const REQUIRE_APPROVAL = process.env.REQUIRE_ACCOUNT_APPROVAL === 'true'; // true => new accounts start as pending_review
 if (!DATABASE_URL) {
   console.error('DATABASE_URL is missing. Add a Railway PostgreSQL service and attach its DATABASE_URL variable.');
@@ -290,6 +294,15 @@ async function initDb() {
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'text';
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS offer JSONB;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS daily_rate NUMERIC;
+      CREATE TABLE IF NOT EXISTS email_tokens (
+        id SERIAL PRIMARY KEY,
+        user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind VARCHAR(20) NOT NULL,
+        token_hash TEXT UNIQUE NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        used_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
       ALTER TABLE payments ADD COLUMN IF NOT EXISTS checkout_id VARCHAR(255);
       ALTER TABLE payments ADD COLUMN IF NOT EXISTS checkout_url TEXT;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR(10);
@@ -298,12 +311,10 @@ async function initDb() {
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS refund_status VARCHAR(20);
       ALTER TABLE professionals ALTER COLUMN rating DROP DEFAULT;
       UPDATE professionals SET rating = NULL WHERE rating = 4.9 AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.professional_id = professionals.id);
-      DO $$ BEGIN
-        ALTER TABLE bookings ALTER COLUMN project_location DROP NOT NULL;
-        ALTER TABLE bookings ALTER COLUMN overtime_terms DROP NOT NULL;
-        ALTER TABLE bookings ALTER COLUMN project_brief DROP NOT NULL;
-        ALTER TABLE bookings ALTER COLUMN project_type DROP NOT NULL;
-      EXCEPTION WHEN OTHERS THEN NULL; END $$;
+      ALTER TABLE bookings ALTER COLUMN project_location DROP NOT NULL;
+      ALTER TABLE bookings ALTER COLUMN overtime_terms DROP NOT NULL;
+      ALTER TABLE bookings ALTER COLUMN project_brief DROP NOT NULL;
+      ALTER TABLE bookings ALTER COLUMN project_type DROP NOT NULL;
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_user_id INT REFERENCES users(id) ON DELETE SET NULL;
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS recipient_user_id INT REFERENCES users(id) ON DELETE SET NULL;
       CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_user_id, created_at DESC);
@@ -608,6 +619,12 @@ async function initDb() {
     // let anyone who registered with someone else's (unverified) address inherit their bookings and crew profile.
     // Ownership is now by user_id only, so link legacy rows once, here, and never again.
     try {
+      // runSql splits on ';', so anything with a procedural body (DO blocks) is done here instead.
+      const hasVerified = await client.query(`SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='email_verified'`);
+      if (!hasVerified.rowCount) {
+        await client.query('ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT TRUE'); // existing accounts are grandfathered in
+        await client.query('ALTER TABLE users ALTER COLUMN email_verified SET DEFAULT FALSE');
+      }
       await client.query(`CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
       const done = await client.query(`SELECT 1 FROM app_migrations WHERE name = 'link-legacy-rows-by-email'`);
       if (!done.rowCount) {
@@ -647,7 +664,8 @@ function setSessionCookie(res, token) {
 const publicUser = u => ({
   id: u.id, name: u.name, email: u.email,
   phone: u.phone || '', location: u.location || '', bio: u.bio || '',
-  accountType: u.account_type, accountStatus: u.account_status, isVerified: !!u.is_verified
+  accountType: u.account_type, accountStatus: u.account_status, isVerified: !!u.is_verified,
+  emailVerified: u.email_verified !== false, emailEnabled: EMAIL_ENABLED
 });
 
 async function loadUser(req) {
@@ -664,6 +682,64 @@ async function startSession(res, userId) {
   await pool.query(`INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL '${SESSION_DAYS} days')`, [userId, sha256(token)]);
   setSessionCookie(res, token);
 }
+/* ---------------- email (SendByte) ---------------- */
+const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function emailLayout(title, lines, cta) {
+  const body = lines.map(l => `<p style="margin:0 0 14px;line-height:1.55">${esc(l)}</p>`).join('');
+  const btn = cta ? `<p style="margin:22px 0"><a href="${esc(cta.url)}" style="background:#12372a;color:#fff;text-decoration:none;padding:12px 20px;border-radius:10px;font-weight:700;display:inline-block">${esc(cta.label)}</a></p><p style="font-size:12px;color:#667085;word-break:break-all">If the button does not work, copy this link: ${esc(cta.url)}</p>` : '';
+  return { html: `<div style="font-family:Arial,Helvetica,sans-serif;color:#1d2939;max-width:520px;margin:auto;padding:24px"><h2 style="margin:0 0 16px;font-size:20px">${esc(title)}</h2>${body}${btn}<hr style="border:0;border-top:1px solid #e4e7ec;margin:24px 0 12px"><p style="font-size:12px;color:#98a2b3">Crew Management. You get this because of your account activity. Message alerts can be switched off in your profile settings.</p></div>`,
+    text: title + '\n\n' + lines.join('\n\n') + (cta ? '\n\n' + cta.label + ': ' + cta.url : '') };
+}
+// Fire-and-forget: an email problem must never break the action that triggered it.
+async function sendEmail(to, subject, lines, cta, idemKey) {
+  if (!EMAIL_ENABLED || !to) return false;
+  const { html, text } = emailLayout(subject, lines, cta);
+  try {
+    const res = await fetch(SENDBYTE_BASE + '/v1/emails', {
+      method: 'POST',
+      headers: Object.assign({ Authorization: 'Bearer ' + SENDBYTE_API_KEY, 'Content-Type': 'application/json' }, idemKey ? { 'Idempotency-Key': idemKey } : {}),
+      body: JSON.stringify({ from: MAIL_FROM, to, subject, html, text }), signal: AbortSignal.timeout(10000) });
+    if (!res.ok) { console.warn('SendByte', res.status, (await res.text()).slice(0, 200)); return false; }
+    return true;
+  } catch (e) { console.warn('SendByte unreachable:', e.message); return false; }
+}
+// Booking and message emails honour the user's "email notifications" setting. Account emails (reset, verify) do not.
+async function emailUsers(userIds, subject, lines, path, key) {
+  if (!EMAIL_ENABLED) return;
+  const ids = [...new Set((userIds || []).map(Number).filter(Boolean))];
+  if (!ids.length) return;
+  try {
+    const { rows } = await pool.query(`SELECT u.id,u.name,u.email FROM users u LEFT JOIN user_settings us ON us.user_id = u.id WHERE u.id = ANY($1::int[]) AND NOT u.is_suspended AND COALESCE(us.email_notifications, TRUE)`, [ids]);
+    for (const u of rows) await sendEmail(u.email, subject, ['Hi ' + String(u.name).split(' ')[0] + ','].concat(lines), { label: 'Open Crew Management', url: appBase() + (path || '/') }, key ? key + '-' + u.id : undefined);
+  } catch (e) { console.warn('emailUsers:', e.message); }
+}
+const appBase = () => APP_URL || 'http://localhost:' + PORT;
+const chatEmailLast = new Map(); // booking:user -> timestamp, so a busy chat does not flood an inbox
+async function emailNewMessage(recipientId, b, senderName, preview) {
+  if (!EMAIL_ENABLED || !recipientId) return;
+  if ((messageNotificationSubs.get(Number(recipientId)) || new Set()).size) return; // already live in the app
+  const k = b.id + ':' + recipientId, now = Date.now();
+  if (now - (chatEmailLast.get(k) || 0) < 15 * 60 * 1000) return;
+  chatEmailLast.set(k, now);
+  await emailUsers([recipientId], 'New message from ' + senderName, [String(preview || '').slice(0, 300)], '/?inbox=' + b.id);
+}
+async function issueEmailToken(db, userId, kind, hours) {
+  await db.query(`DELETE FROM email_tokens WHERE user_id = $1 AND kind = $2 AND used_at IS NULL`, [userId, kind]);
+  const token = crypto.randomBytes(32).toString('hex');
+  await db.query(`INSERT INTO email_tokens (user_id, kind, token_hash, expires_at) VALUES ($1,$2,$3, NOW() + ($4 || ' hours')::interval)`, [userId, kind, sha256(token), String(hours)]);
+  return token;
+}
+async function sendVerifyEmail(user) {
+  const token = await issueEmailToken(pool, user.id, 'verify', 48);
+  return sendEmail(user.email, 'Confirm your email address', ['Hi ' + String(user.name).split(' ')[0] + ',', 'Please confirm your email address so you can book crew or accept bookings.'], { label: 'Confirm my email', url: appBase() + '/?verify=' + token });
+}
+function checkPassword(password) {
+  if (password.length < 10 || password.length > 200 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) fail(400, 'Password must be at least 10 characters and include a letter and a number.');
+}
+const requireVerifiedEmail = (req, res, next) => {
+  if (EMAIL_ENABLED && req.user.email_verified === false) return res.status(403).json({ error: 'Please confirm your email address first. We sent you a link; you can request another from your profile.', code: 'email_unverified' });
+  next();
+};
 const requireUser = wrap(async (req, res, next) => {
   const u = await loadUser(req);
   if (!u) return res.status(401).json({ error: 'Please log in to continue.' });
@@ -780,7 +856,7 @@ app.post('/api/auth/register', authLimiter, wrap(async (req, res) => {
   const accountType = req.body.accountType === 'crew' ? 'crew' : 'client';
   if (name.length < 2) fail(400, 'Please enter your full name.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail(400, 'Please enter a valid email address.');
-  if (password.length < 10 || password.length > 200 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) fail(400, 'Password must be at least 10 characters and include a letter and a number.');
+  checkPassword(password);
   if (!req.body.termsAccepted) fail(400, 'You must accept the terms to create an account.');
   const hash = await bcrypt.hash(password, 12);
   let user;
@@ -794,6 +870,7 @@ app.post('/api/auth/register', authLimiter, wrap(async (req, res) => {
     throw e;
   }
   await startSession(res, user.id);
+  if (EMAIL_ENABLED) sendVerifyEmail(user).catch(() => {});
   res.status(201).json({ success: true, user: publicUser(user) });
 }));
 
@@ -817,6 +894,79 @@ app.get('/api/auth/me', wrap(async (req, res) => {
 app.post('/api/auth/logout', wrap(async (req, res) => {
   const token = parseCookies(req)[SESSION_COOKIE];
   if (token) await pool.query('DELETE FROM sessions WHERE token_hash = $1', [sha256(token)]);
+  res.clearCookie(SESSION_COOKIE, { path: '/' });
+  res.json({ success: true });
+}));
+
+const accountMailLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 6, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Too many requests. Try again in a few minutes.' } });
+app.post('/api/auth/forgot', accountMailLimiter, wrap(async (req, res) => {
+  const email = str(req.body.email, 254).toLowerCase();
+  const u = (await pool.query('SELECT * FROM users WHERE email = $1', [email])).rows[0];
+  // Same answer whether or not the account exists, so this cannot be used to discover who has one.
+  if (u && !u.is_suspended && EMAIL_ENABLED) {
+    const token = await issueEmailToken(pool, u.id, 'reset', 1);
+    sendEmail(u.email, 'Reset your password', ['Hi ' + String(u.name).split(' ')[0] + ',', 'Use the button below to choose a new password. The link works once and expires in 1 hour. If you did not ask for this, ignore this email; your password has not changed.'], { label: 'Choose a new password', url: appBase() + '/?reset=' + token }).catch(() => {});
+  }
+  res.json({ success: true, message: 'If that email has an account, a reset link is on its way.' });
+}));
+app.post('/api/auth/reset', authLimiter, wrap(async (req, res) => {
+  const token = String(req.body.token || ''); const password = String(req.body.password || '');
+  checkPassword(password);
+  const hash = await bcrypt.hash(password, 12);
+  await withTx(async db => {
+    const t = (await db.query(`SELECT * FROM email_tokens WHERE token_hash = $1 AND kind = 'reset' AND used_at IS NULL AND expires_at > NOW() FOR UPDATE`, [sha256(token)])).rows[0];
+    if (!t) fail(400, 'This reset link is invalid or has expired. Please request a new one.');
+    await db.query('UPDATE email_tokens SET used_at = NOW() WHERE id = $1', [t.id]);
+    await db.query('UPDATE users SET password_hash = $1, email_verified = TRUE WHERE id = $2', [hash, t.user_id]); // clicking the emailed link proves the inbox
+    await db.query('DELETE FROM sessions WHERE user_id = $1', [t.user_id]); // sign out everywhere
+  });
+  res.json({ success: true });
+}));
+app.post('/api/auth/change-password', requireUser, authLimiter, wrap(async (req, res) => {
+  const current = String(req.body.current || '').slice(0, 200), password = String(req.body.password || '');
+  if (!(await bcrypt.compare(current, req.user.password_hash))) fail(403, 'Your current password is not correct.');
+  checkPassword(password);
+  if (password === current) fail(400, 'Choose a password you have not used just now.');
+  const hash = await bcrypt.hash(password, 12);
+  await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.user.id]);
+  await pool.query('DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2', [req.user.id, sha256(parseCookies(req)[SESSION_COOKIE] || '')]);
+  sendEmail(req.user.email, 'Your password was changed', ['Your Crew Management password was just changed. If this was not you, reset your password straight away and contact support.']).catch(() => {});
+  res.json({ success: true });
+}));
+app.post('/api/auth/verify-email', authLimiter, wrap(async (req, res) => {
+  const token = String(req.body.token || '');
+  const t = (await pool.query(`UPDATE email_tokens SET used_at = NOW() WHERE token_hash = $1 AND kind = 'verify' AND used_at IS NULL AND expires_at > NOW() RETURNING user_id`, [sha256(token)])).rows[0];
+  if (!t) fail(400, 'This confirmation link is invalid or has expired. Sign in and ask for a new one.');
+  await pool.query('UPDATE users SET email_verified = TRUE WHERE id = $1', [t.user_id]);
+  res.json({ success: true });
+}));
+app.post('/api/auth/resend-verification', requireUser, accountMailLimiter, wrap(async (req, res) => {
+  if (!EMAIL_ENABLED) fail(503, 'Email is not set up yet.');
+  if (req.user.email_verified !== false) return res.json({ success: true, already: true });
+  await sendVerifyEmail(req.user);
+  res.json({ success: true });
+}));
+// Deleting an account anonymises it (bookings and invoices must stay for the other party and for tax records).
+app.post('/api/account/delete', requireUser, authLimiter, wrap(async (req, res) => {
+  const password = String(req.body.password || '').slice(0, 200);
+  if (!(await bcrypt.compare(password, req.user.password_hash))) fail(403, 'Your password is not correct.');
+  await withTx(async db => {
+    const profileIds = await crewProfessionalIds(db, req.user);
+    const open = await db.query(
+      `SELECT COUNT(*)::int AS n FROM bookings WHERE status = ANY($1::text[]) AND (user_id = $2 OR professional_id = ANY($3::int[]))`,
+      [BLOCKING_STATUSES.filter(x => x !== 'completed'), req.user.id, profileIds]);
+    if (open.rows[0].n) fail(409, 'You have confirmed or active bookings. Finish or cancel them first, then you can delete your account.');
+    // pending requests on either side are withdrawn / declined
+    await db.query(`UPDATE bookings SET status = 'cancelled', cancelled_by = $3, cancel_reason = 'Account closed' WHERE status IN ('awaiting_review','pending','counter_pending') AND (user_id = $1 OR professional_id = ANY($2::int[]))`, [req.user.id, profileIds, req.user.account_type === 'crew' ? 'crew' : 'client']);
+    if (profileIds.length) await db.query('UPDATE professionals SET is_active = FALSE WHERE id = ANY($1::int[])', [profileIds]);
+    await db.query('DELETE FROM id_documents WHERE user_id = $1', [req.user.id]);
+    await db.query('DELETE FROM user_settings WHERE user_id = $1', [req.user.id]);
+    await db.query('DELETE FROM sessions WHERE user_id = $1', [req.user.id]);
+    await db.query('DELETE FROM email_tokens WHERE user_id = $1', [req.user.id]);
+    await db.query(`UPDATE crew_applications SET name = 'Deleted user', full_name = 'Deleted user', email = NULL, bio = NULL WHERE user_id = $1`, [req.user.id]);
+    await db.query(`UPDATE users SET name = 'Deleted user', email = $2, password_hash = $3, phone = NULL, location = NULL, bio = NULL, is_suspended = TRUE, email_verified = FALSE WHERE id = $1`,
+      [req.user.id, 'deleted-' + req.user.id + '@deleted.invalid', await bcrypt.hash(crypto.randomBytes(24).toString('hex'), 10)]);
+  });
   res.clearCookie(SESSION_COOKIE, { path: '/' });
   res.json({ success: true });
 }));
@@ -954,11 +1104,18 @@ function pushChat(b, row, recipientId, user) {
   for (const sub of chatSubs.get(b.id) || []) sub.write('data: ' + JSON.stringify(row) + '\n\n');
   if (recipientId && Number(recipientId) !== Number(user.id)) {
     emitMessageNotification(recipientId, { type: 'message', booking_id: b.id, reference: b.reference || refFor(b.id), sender_name: user.name, preview: row.masked_content, created_at: row.created_at });
+    if (row.kind === 'text' || !row.kind) emailNewMessage(recipientId, b, user.name, row.masked_content).catch(() => {});
+    else {
+      const ref = b.reference || refFor(b.id);
+      const title = row.kind === 'request' ? 'New booking request' : row.kind === 'offer' ? 'Proposed change to a booking' : 'Booking update';
+      const detail = row.kind === 'system' ? row.masked_content : user.name + ' sent you ' + (row.kind === 'request' ? 'a booking request' : 'a proposed change') + '. Open the chat to review the dates and price and to reply.';
+      emailUsers([recipientId], title + ' (' + ref + ')', [detail], '/?inbox=' + b.id, 'msg' + row.id).catch(() => {});
+    }
   }
 }
 const setOfferStatus = (db, messageId, status) => db.query(`UPDATE messages SET offer = jsonb_set(offer, '{status}', to_jsonb($2::text)) WHERE id = $1 RETURNING *`, [messageId, status]);
 
-app.post('/api/bookings', requireUser, requireApproved, wrap(async (req, res) => {
+app.post('/api/bookings', requireUser, requireApproved, requireVerifiedEmail, wrap(async (req, res) => {
   const b = req.body || {};
   const proId = toInt(b.professionalId);
   if (!proId) fail(400, 'Please choose a crew member.');
@@ -1008,6 +1165,7 @@ async function crewUserIdsFor(db, professionalId) {
 // Live pop-up for booking lifecycle events (the same stream the message alerts use).
 function notifyBooking(userIds, b, title, preview) {
   for (const uid of userIds) if (uid) emitMessageNotification(uid, { type: 'booking', booking_id: b.id, reference: b.reference || refFor(b.id), sender_name: title, preview, created_at: new Date().toISOString() });
+  emailUsers(userIds, title + ' (' + (b.reference || refFor(b.id)) + ')', [preview], '/?inbox=' + b.id, 'bk' + b.id + '-' + Buffer.from(title).toString('hex').slice(0, 20) + '-' + Date.now()).catch(() => {});
 }
 // Strict policy. A client may withdraw a request until the crew member confirms it. After that the only way out
 // is through the crew member (who must give a reason; a paid booking is then flagged for a refund) or support.
@@ -1202,14 +1360,19 @@ async function settleFromBachs(payment) {
     if (r.sys) {
       for (const sub of chatSubs.get(r.booking.id) || []) sub.write('data: ' + JSON.stringify(r.sys) + '\n\n');
       for (const uid of [Number(r.booking.user_id), r.crewId]) if (uid) emitMessageNotification(uid, { type: 'message', booking_id: r.booking.id, reference: r.booking.reference || refFor(r.booking.id), sender_name: 'Payment received', preview: r.sys.masked_content, created_at: r.sys.created_at });
-      afterPayment(r.booking).catch(e => console.warn('afterPayment:', e.message));
+      afterPayment(r.booking, r.crewId).catch(e => console.warn('afterPayment:', e.message));
     }
     return { status: r.status };
   });
 }
-async function afterPayment() { /* hook for transactional email (added with the email integration) */ }
+async function afterPayment(booking, crewId) {
+  const ref = booking.reference || refFor(booking.id);
+  await emailUsers([Number(booking.user_id)], 'Payment received (' + ref + ')', ['We received your payment of ' + naira(booking.client_total) + '. Your booking is confirmed.'], '/?inbox=' + booking.id, 'pay' + booking.id + '-c');
+  await emailUsers([crewId], 'Booking paid (' + ref + ')', ['The client has paid for ' + ref + '. You are confirmed for ' + fmtRange(booking) + '.'], '/?inbox=' + booking.id, 'pay' + booking.id + '-p');
+}
+const naira = n => '₦' + Number(n || 0).toLocaleString('en-NG', { maximumFractionDigits: 0 });
 
-app.post('/api/payments/initialize', requireUser, wrap(async (req, res) => {
+app.post('/api/payments/initialize', requireUser, requireVerifiedEmail, wrap(async (req, res) => {
   if (!PAYMENTS_ENABLED || !BACHS_API_KEY) fail(503, 'Online payments are not available yet.');
   const b = await getAccessibleBooking(pool, req, req.body.booking_id);
   if (!ownsBooking(req.user, b)) fail(403, 'Only the client can pay for a booking.');
@@ -1393,6 +1556,7 @@ app.post('/api/bookings/:id/messages', requireUser, wrap(async (req, res) => {
   for (const sub of chatSubs.get(b.id) || []) sub.write('data: '+JSON.stringify(rows[0])+'\n\n');
   if (recipientId && recipientId !== Number(req.user.id)) {
     emitMessageNotification(recipientId,{type:'message',booking_id:b.id,reference:b.reference||refFor(b.id),sender_name:req.user.name,preview:rows[0].masked_content,created_at:rows[0].created_at});
+    emailNewMessage(recipientId, b, req.user.name, rows[0].masked_content).catch(() => {});
   }
   res.status(201).json(rows[0]);
 }));
@@ -1494,7 +1658,7 @@ app.post('/api/team-bookings', requireUser, requireApproved, wrap(async (req, re
 }));
 
 /* ---------------- crew applications ---------------- */
-app.post('/api/crew-applications', requireUser, requireApproved, wrap(async (req, res) => {
+app.post('/api/crew-applications', requireUser, requireApproved, requireVerifiedEmail, wrap(async (req, res) => {
   const role = str(req.body.role, 120);
   const location = str(req.body.location, 120);
   let portfolio = str(req.body.portfolio, 500);

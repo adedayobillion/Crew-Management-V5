@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { AuthModal, BookingModal, JoinModal, LegalModal } from './modals.jsx';
+import { AuthModal, BookingModal, JoinModal, LegalModal, ResetModal } from './modals.jsx';
 import { MessageInbox, ProfilePage } from './Account.jsx';
 import { Banner, COVERS, CrewDashboard, Dashboard, Discover, Footer, Hero, How, Nav, SYMBOLS, Trust } from './sections.jsx';
 import { ScrollProgress, ToastProvider, useToast } from './ui.jsx';
@@ -62,6 +62,23 @@ function Shell() {
     };
     return () => { active = false; stream.close(); };
   }, [user?.id, messagePopupsEnabled, inboxOpen, refreshUnread]);
+
+  // Links from emails: ?reset=<token>, ?verify=<token>, ?inbox=<booking id>
+  const [resetToken, setResetToken] = useState('');
+  const [wantInbox, setWantInbox] = useState(null);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const reset = q.get('reset'), verify = q.get('verify'), inbox = q.get('inbox');
+    if (!reset && !verify && !inbox) return;
+    window.history.replaceState({}, '', window.location.pathname);
+    if (reset) setResetToken(reset);
+    if (inbox) setWantInbox(Number(inbox));
+    if (verify) postJSON('/api/auth/verify-email', { token: verify }).then(r => {
+      toast(r.ok ? 'Email confirmed. Thank you.' : (r.data.error || 'Could not confirm your email.'));
+      if (r.ok) http('/api/auth/me').then(({ data }) => setUser(data.user || null)).catch(() => {});
+    }).catch(() => toast('Could not confirm your email.'));
+  }, []);
+  useEffect(() => { if (wantInbox && user) { setInboxInitialId(wantInbox); setInboxOpen(true); setWantInbox(null); } }, [wantInbox, user]);
 
   // Returning from the hosted checkout: confirm with the server (it re-checks with the gateway) and open the chat.
   useEffect(() => {
@@ -146,6 +163,12 @@ function Shell() {
     <>
       <ScrollProgress />
       <Nav user={user} onLogin={() => openAuth('login')} onLogout={logout} onDashboard={openDashboard} onCrewDashboard={openCrewDashboard} onSwitch={switchMode} onHome={() => showPage('marketplace')} onJoin={openJoin} onProfile={openProfile} onMessages={() => openInbox()} unreadCount={unreadMessages} />
+      {user && user.emailEnabled && user.emailVerified === false && (
+        <div role="status" className="border-b border-[#f1dfae] bg-[#fff8e6] px-4 py-2 text-center text-xs font-semibold text-[#7a5a0b]">
+          Please confirm your email address to book crew or accept bookings.{' '}
+          <button type="button" className="underline" onClick={async () => { const r = await postJSON('/api/auth/resend-verification', {}).catch(() => ({ ok: false, data: {} })); toast(r.ok ? 'Confirmation email sent. Check your inbox.' : (r.data.error || 'Could not send the email.')); }}>Resend the email</button>
+        </div>
+      )}
       <main>
         <AnimatePresence mode="wait">
           {page === 'marketplace' ? (
@@ -154,12 +177,13 @@ function Shell() {
               <Discover pros={pros} loading={loading} filters={filters} setFilters={setFilters} saved={saved} onSave={toggleSave} onBook={openBooking} />
               <How /><Trust /><Banner onJoin={openJoin} />
             </div>
-          ) : page === 'profile' ? <ProfilePage key="profile" user={user} onBack={() => showPage('marketplace')} onUserUpdated={profile => { setUser(profile); refreshProfessionals(); }} onSettingsUpdated={settings => { setMessagePopupsEnabled(settings.message_popups !== false); refreshProfessionals(); }} />
+          ) : page === 'profile' ? <ProfilePage key="profile" user={user} onBack={() => showPage('marketplace')} onUserUpdated={profile => { setUser(profile); refreshProfessionals(); }} onSignedOut={() => { setUser(null); showPage('marketplace'); toast('Your account has been deleted.'); }} onSettingsUpdated={settings => { setMessagePopupsEnabled(settings.message_popups !== false); refreshProfessionals(); }} />
           : page === 'crew' ? <CrewDashboard key="c" onBack={() => showPage('marketplace')} onJoin={openJoin} toast={toast} user={user} onMessages={openInbox} />
           : <Dashboard key="d" onBack={() => showPage('marketplace')} onJoin={openJoin} toast={toast} user={user} onMessages={openInbox} />}
         </AnimatePresence>
       </main>
       <Footer openLegal={setLegal} />
+      <ResetModal token={resetToken} onClose={() => setResetToken('')} onDone={() => { setResetToken(''); setUser(null); toast('Password updated. Please log in with your new password.'); openAuth('login'); }} />
       <AuthModal open={auth.open} mode={auth.mode} setMode={m => setAuth(a => ({ ...a, mode: m }))} defaultRole={auth.role} onClose={closeAuth} onSuccess={onAuthed} openLegal={setLegal} />
       <BookingModal pro={bookingPro} user={user} onClose={() => setBookingPro(null)} onNeedAuth={pro => { setBookingPro(null); openAuth('login', () => setBookingPro(pro)); }}
         onSent={b => { setBookingPro(null); toast('Request sent. Agree the details in the chat. Nothing is charged until it is accepted.'); openInbox(b.id); }} />
