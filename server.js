@@ -705,7 +705,7 @@ app.get('/api/profile', requireUser, wrap(async (req, res) => {
 app.patch('/api/profile', requireUser, wrap(async (req, res) => {
   const name = str(req.body.name,120), phone = str(req.body.phone,40), location = str(req.body.location,120), bio = str(req.body.bio,1000);
   if (name.length < 2) fail(400, 'Please enter your full name.');
-  const { rows } = await withTx(async db => {
+  const rows = await withTx(async db => {
     const updated = await db.query('UPDATE users SET name=$1,phone=$2,location=$3,bio=$4 WHERE id=$5 RETURNING *',
       [name, phone || null, location || null, bio || null, req.user.id]);
     // Keep the public crew listing in sync with the account owner’s editable profile.
