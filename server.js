@@ -1681,8 +1681,21 @@ app.post('/api/crew-applications', requireUser, requireApproved, requireVerified
   const dup = await pool.query(`SELECT id FROM crew_applications WHERE user_id = $1 AND status = 'pending'`, [req.user.id]);
   if (dup.rows.length) fail(409, 'You already have an application under review (#' + dup.rows[0].id + ').');
   const { rows } = await pool.query(
-    `INSERT INTO crew_applications (user_id, name, full_name, email, role, location, portfolio, portfolio_url, bio) VALUES ($1,$2,$2,$3,$4,$5,$6,$6,$7) RETURNING *`,
-    [req.user.id, req.user.name, req.user.email, role, location, portfolio || '', bio]);
+    `INSERT INTO crew_applications
+     (user_id, name, full_name, email, role, location, portfolio, portfolio_url, bio)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING *`,
+    [
+      req.user.id,
+      req.user.name,
+      req.user.name,
+      req.user.email,
+      role,
+      location,
+      portfolio || '',
+      portfolio || '',
+      bio
+    ]);
   res.status(201).json({ success: true, application: rows[0] });
 }));
 
