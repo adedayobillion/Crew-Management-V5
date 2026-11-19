@@ -1079,7 +1079,10 @@ app.patch('/api/crew/listing', requireUser, wrap(async (req, res) => {
   if (b.skills !== undefined) {
     const list = (Array.isArray(b.skills) ? b.skills : String(b.skills).split(',')).map(x => str(x, 40)).filter(Boolean);
     if (list.length > 15) fail(400, 'Add at most 15 skills.');
-    add('skills', 'text[]', [...new Set(list)]);
+    const uniqueSkills = [...new Set(list)];
+    // Existing Railway databases may define skills as JSONB rather than TEXT[].
+    if (SKILLS_IS_JSON) add('skills', 'jsonb', JSON.stringify(uniqueSkills));
+    else add('skills', 'text[]', uniqueSkills);
   }
   if (b.showreel !== undefined) {
     const v = str(b.showreel, 300);
