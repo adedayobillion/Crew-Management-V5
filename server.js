@@ -1067,8 +1067,7 @@ const isoDate = v => { const x = String(v || ''); if (!/^\d{4}-\d{2}-\d{2}$/.tes
 const listingView = p => ({ id: p.id, role: p.role, category: p.category || '', location: p.location || '', bio: p.bio || '', skills: p.skills || [], showreel: p.showreel || '', rate: Number(p.rate) || 0, photo: p.photo || '', is_active: p.is_active !== false, status: p.status });
 app.get('/api/crew/listing', requireUser, wrap(async (req, res) => {
   const ids = await crewProfessionalIds(pool, req.user);
-  if (!ids.length) fail(404, 'You do not have a published crew profile yet.');
-  const rows = (await pool.query('SELECT * FROM professionals WHERE id = ANY($1::int[]) ORDER BY id', [ids])).rows;
+  const rows = ids.length ? (await pool.query('SELECT * FROM professionals WHERE id = ANY($1::int[]) ORDER BY id', [ids])).rows : [];
   const blocks = (await pool.query(`SELECT id, professional_id, start_date::text AS start_date, end_date::text AS end_date, reason FROM availability_blocks WHERE professional_id = ANY($1::int[]) AND end_date >= $2::date ORDER BY start_date`, [ids, todayLagos()])).rows;
   const listings = rows.map(listingView);
   res.json({ listings, listing: listings[0] || null, blocks });
