@@ -1129,8 +1129,8 @@ app.post('/api/crew/listings', requireUser, requireApproved, requireVerifiedEmai
   res.status(201).json({ success: true, listing: listingView(professional) });
 }));
 const PHOTO_TYPES = { 'image/jpeg': b => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff, 'image/png': b => b.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])), 'image/webp': b => b.subarray(0, 4).toString('ascii') === 'RIFF' && b.subarray(8, 12).toString('ascii') === 'WEBP' };
-app.post('/api/crew/photo', requireUser, wrap(async (req, res) => {
-  const p = await myListing(pool, req.user);
+async function uploadCrewListingPhoto(req, res, listingId) {
+  const p = await myListing(pool, req.user, listingId);
   const mime = str(req.body.mime_type, 40).toLowerCase(), b64 = String(req.body.data_base64 || '');
   if (!PHOTO_TYPES[mime]) fail(400, 'Upload a JPG, PNG or WebP photo.');
   if (!b64 || b64.length > 3 * 1024 * 1024 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) fail(400, 'The photo is empty, invalid or larger than 2 MB.');
@@ -1141,11 +1141,9 @@ app.post('/api/crew/photo', requireUser, wrap(async (req, res) => {
     await db.query('UPDATE professionals SET photo = $1::text WHERE id = $2', [`/api/professionals/${p.id}/photo?v=${Date.now()}`, p.id]);
   });
   res.json({ success: true, photo: `/api/professionals/${p.id}/photo?v=${Date.now()}` });
-}));
-app.post('/api/crew/photo', requireUser, wrap(async (req, res) => {
-  req.params.id = String((await myListing(pool, req.user)).id);
-  return app._router.handle(req, res, () => {});
-}));
+}
+app.post('/api/crew/listings/:id/photo', requireUser, wrap(async (req, res) => uploadCrewListingPhoto(req, res, req.params.id)));
+app.post('/api/crew/photo', requireUser, wrap(async (req, res) => uploadCrewListingPhoto(req, res, null)));
 app.delete('/api/crew/listings/:id/photo', requireUser, wrap(async (req, res) => {
   const p = await myListing(pool, req.user, req.params.id);
   await pool.query('DELETE FROM professional_photos WHERE professional_id = $1', [p.id]);
