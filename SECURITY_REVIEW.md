@@ -64,3 +64,8 @@ Limitations remain: this uses one shared admin token, not named admin identities
 - Database TLS: set `DATABASE_SSL_CA` to verify the server certificate; internal Railway hosts skip TLS.
 - Payments: `/api/payments/initialize` returns 503 unless `PAYMENTS_ENABLED=true`. Invoice supplier TIN comes from `SUPPLIER_TIN` (no hardcoded placeholder).
 - Still open: e-mail verification, MFA / named admin accounts, shared rate-limit and SSE stores for multiple replicas, a real migration tool.
+
+## Admin sign-in (update)
+- Admins can now have named accounts (email + password + authenticator-app code, with one-time recovery codes). Sessions last 8 hours in an HttpOnly, SameSite=Strict cookie; changes also need an `x-requested-with` header. Wrong codes lock a sign-in attempt after 5 tries; sign-in attempts are rate limited.
+- The shared `CMA_ADMIN_TOKEN` still works so the first account can be created. Once everyone has an account, set `ADMIN_TOKEN_AUTH=disabled` to turn the shared token off.
+- Admin 2FA secrets are encrypted with `ADMIN_2FA_KEY` (or `ID_ENCRYPTION_KEY`). Losing that key means every admin must have 2FA reset.

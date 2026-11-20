@@ -27,10 +27,18 @@ export default function Admin() {
   const [filters, setFilters] = useState({ status: 'all', flag: 'all', q: '' });
   const [audit, setAudit] = useState(null); const [bookings, setBookings] = useState(null); const [apps, setApps] = useState(null); const [listings, setListings] = useState(null); const [idDocuments, setIdDocuments] = useState(null);
   const [notes, setNotes] = useState({});
+  const [payouts, setPayouts] = useState(null); const [pros, setPros] = useState(null); const [admins, setAdmins] = useState(null);
+  const [adminName, setAdminName] = useState(''); const [cfg, setCfg] = useState({ accounts: false, tokenLogin: true });
+  const [useToken, setUseToken] = useState(false);
+  const [step, setStep] = useState('creds'); const [creds, setCreds] = useState({ email: '', password: '', code: '' });
+  const [ticket, setTicket] = useState(''); const [setup, setSetup] = useState(null); const [recovery, setRecovery] = useState(null);
+  const [newAdmin, setNewAdmin] = useState({ name: '', email: '', password: '' });
   const say = (text, err = false) => setMsg({ text, err });
 
   const api = useCallback(async (url, opts = {}, t = token) => {
-    const r = await fetch(url, { ...opts, headers: { 'Content-Type': 'application/json', 'x-admin-token': t, ...opts.headers } });
+    const h = { 'Content-Type': 'application/json', 'x-requested-with': 'cma-admin', ...opts.headers };
+    if (t) h['x-admin-token'] = t;
+    const r = await fetch(url, { ...opts, credentials: 'same-origin', headers: h });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw Error(d.error || `Request failed (${r.status})`);
     return d;
@@ -46,10 +54,29 @@ export default function Admin() {
     if (!confirm('Remove ' + name + ' — ' + role + ' from the public marketplace? The account and booking history will remain.')) return;
     try { await api('/api/admin/listings/' + id, { method: 'DELETE' }); say('Listing removed from marketplace.'); await loadListings(); } catch (e) { say(e.message, true); }
   }
+  const loadPayouts = async () => { try { setPayouts(await api('/api/admin/payouts')); } catch (e) { say(e.message, true); } };
+  const loadPros = async () => { try { setPros((await api('/api/admin/professionals')).professionals); } catch (e) { say(e.message, true); } };
+  const loadAdmins = async () => { try { setAdmins((await api('/api/admin/accounts')).accounts); } catch (e) { say(e.message, true); } };
+  async function recordPayout(b) {
+    if (!confirm('Record a payout of ₦' + Number(b.crew_net).toLocaleString() + ' to ' + b.professional_name + ' for ' + b.reference + '?\n\nOnly do this after you have actually sent the money. The crew member is emailed.')) return;
+    try { await api('/api/admin/payouts', { method: 'POST', body: JSON.stringify({ booking_id: b.id }) }); say('Payout recorded.'); loadPayouts(); } catch (e) { say(e.message, true); }
+  }
+  async function setVerified(p, verified) {
+    if (!confirm((verified ? 'Mark ' : 'Remove the verified badge from ') + p.name + (verified ? ' as a verified professional?' : '?'))) return;
+    try { await api('/api/admin/verify-professional/' + p.id, { method: 'POST', body: JSON.stringify({ verified }) }); say('Updated.'); loadPros(); } catch (e) { say(e.message, true); }
+  }
+  async function createAdmin(e) {
+    e.preventDefault();
+    try { await api('/api/admin/accounts', { method: 'POST', body: JSON.stringify(newAdmin) }); say('Admin created. They set up their authenticator app at first sign-in.'); setNewAdmin({ name: '', email: '', password: '' }); loadAdmins(); } catch (err) { say(err.message, true); }
+  }
+  async function adminChange(a, body, q) {
+    if (!confirm(q)) return;
+    try { await api('/api/admin/accounts/' + a.id, { method: 'PATCH', body: JSON.stringify(body) }); say('Updated.'); loadAdmins(); } catch (e) { say(e.message, true); }
+  }
   const loadIdDocuments = async () => { try { setIdDocuments((await api('/api/admin/id-documents')).documents); } catch (e) { say(e.message, true); } };
   async function downloadIdDocument(id, filename) {
     try {
-      const r = await fetch('/api/admin/id-documents/' + id + '/file', { headers: { 'x-admin-token': token } });
+      const r = await fetch('/api/admin/id-documents/' + id + '/file', { credentials: 'same-origin', headers: token ? { 'x-admin-token': token } : {} });
       if (!r.ok) { const d = await r.json().catch(() => ({})); throw Error(d.error || 'Could not retrieve document.'); }
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
@@ -69,13 +96,38 @@ export default function Admin() {
   }
   const refreshAll = async t => { await Promise.all([loadOverview(t), loadUsers(t)]); say('Dashboard refreshed.'); };
 
-  async function login(e) {
+  useEffect(() => {
+    (async () => {
+      try { setCfg(await (await fetch('/api/admin/auth/config')).json()); } catch (e) { /* keep defaults */ }
+      try {
+        const me = await (await fetch('/api/admin/auth/me', { credentials: 'same-origin' })).json();
+        if (me.admin) { setAdminName(me.admin.name); setAuthed(true); await Promise.all([loadOverview(''), loadUsers('')]); }
+      } catch (e) { /* not signed in */ }
+    })();
+  }, []);
+  async function tokenLogin(e) {
     e.preventDefault(); const t = tokenInput.trim(); setLoginErr('');
-    try { await api('/api/admin/overview', {}, t); setToken(t); setAuthed(true); await Promise.all([loadOverview(t), loadUsers(t)]); }
+    try { await api('/api/admin/overview', {}, t); setToken(t); setAuthed(true); setAdminName('token'); await Promise.all([loadOverview(t), loadUsers(t)]); }
     catch (err) { setLoginErr(err.message === 'Unauthorized' ? 'Token not accepted. Check CMA_ADMIN_TOKEN in Railway.' : err.message); }
   }
-  function lock() { setToken(''); setTokenInput(''); setAuthed(false); setStats(null); setUsers(null); }
-  useEffect(() => { if (!authed) return; if (tab === 'audit') loadAudit(); if (tab === 'bookings') loadBookings(); if (tab === 'applications') loadApps(); if (tab === 'listings') loadListings(); if (tab === 'identity') loadIdDocuments(); }, [tab, authed]);
+  async function login(e) {
+    e.preventDefault(); setLoginErr('');
+    try {
+      if (step === 'creds') {
+        const d = await api('/api/admin/auth/login', { method: 'POST', body: JSON.stringify({ email: creds.email, password: creds.password }) }, '');
+        setTicket(d.ticket); setSetup(d.setup); setStep(d.step); setCreds(c => ({ ...c, code: '' }));
+      } else {
+        const d = await api('/api/admin/auth/verify', { method: 'POST', body: JSON.stringify({ ticket, code: creds.code }) }, '');
+        setAdminName(d.admin.name);
+        if (d.recovery_codes) { setRecovery(d.recovery_codes); return; } // show once; continue from that screen
+        if (d.used_recovery_code) say('You used a recovery code. Ask another admin to reset your two-factor setup if you lost your phone.', true);
+        await finishLogin();
+      }
+    } catch (err) { setLoginErr(err.message); if (/expired|Start again/.test(err.message)) { setStep('creds'); setSetup(null); } }
+  }
+  async function finishLogin() { setRecovery(null); setAuthed(true); setCreds({ email: '', password: '', code: '' }); setStep('creds'); setSetup(null); await Promise.all([loadOverview(''), loadUsers('')]); }
+  async function lock() { if (!token) await fetch('/api/admin/auth/logout', { method: 'POST', credentials: 'same-origin', headers: { 'x-requested-with': 'cma-admin' } }).catch(() => {}); setToken(''); setTokenInput(''); setAdminName(''); setAuthed(false); setStats(null); setUsers(null); }
+  useEffect(() => { if (!authed) return; if (tab === 'audit') loadAudit(); if (tab === 'bookings') loadBookings(); if (tab === 'applications') loadApps(); if (tab === 'listings') loadListings(); if (tab === 'identity') loadIdDocuments(); if (tab === 'payouts') loadPayouts(); if (tab === 'professionals') loadPros(); if (tab === 'admins') loadAdmins(); }, [tab, authed]);
 
   const labels = { approve: 'approve this account', reject: 'reject this account', verify: 'mark this account verified', unverify: 'remove this verification', flag_suspicious: 'flag this account for suspicious activity', clear_suspicious: 'clear this suspicious-activity flag', suspend: 'suspend this account and revoke its active sessions', reactivate: 'reactivate this account' };
   async function act(id, action) {
@@ -110,18 +162,43 @@ export default function Admin() {
     <div className="mx-auto max-w-[1400px] p-4 sm:p-6">
       <header className="sticky top-2.5 z-20 mb-6 flex items-center justify-between gap-4 rounded-[18px] border border-white/80 bg-white/75 px-4 py-3 shadow-[0_10px_36px_#14203314] backdrop-blur-xl">
         <div className="font-display text-xl font-extrabold tracking-[-.04em]">CMA <small className="block text-[11px] tracking-[.08em] text-muted">ADMIN CONTROL CENTRE</small></div>
-        <div className="flex items-center gap-3 text-sm"><a href="/" className="hover:underline">View marketplace <ArrowUpRight className="size-4" aria-hidden="true" /></a>{authed && <Button size="sm" variant="dark" onClick={lock}>Lock console</Button>}</div>
+        <div className="flex items-center gap-3 text-sm"><a href="/" className="hover:underline">View marketplace <ArrowUpRight className="size-4" aria-hidden="true" /></a>{authed && <span className="text-xs text-muted">Signed in as <strong>{adminName || 'admin'}</strong></span>}{authed && <Button size="sm" variant="dark" onClick={lock}>{token ? 'Lock console' : 'Sign out'}</Button>}</div>
       </header>
 
       <AnimatePresence mode="wait">
         {!authed ? (
-          <motion.form key="login" onSubmit={login} initial={{ opacity: 0, y: 22, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -10 }} transition={{ type: 'spring', stiffness: 300, damping: 24 }} className={cn(card, 'mx-auto mt-[9vh] max-w-[480px] p-6 shadow-[0_30px_80px_#14203322]')}>
+          <motion.form key="login" onSubmit={useToken ? tokenLogin : recovery ? (e => { e.preventDefault(); finishLogin(); }) : login} initial={{ opacity: 0, y: 22, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -10 }} transition={{ type: 'spring', stiffness: 300, damping: 24 }} className={cn(card, 'mx-auto mt-[9vh] max-w-[480px] p-6 shadow-[0_30px_80px_#14203322]')}>
             <h1 className="font-display text-2xl font-extrabold">Administrator sign-in</h1>
-            <p className="mt-2 text-muted">Enter the secret admin token configured in Railway Variables. This token is never embedded in the public marketplace.</p>
-            <label htmlFor="token" className="mb-1.5 mt-4 block font-bold">Admin token</label>
-            <input id="token" type="password" autoComplete="current-password" required minLength={20} placeholder="Paste CMA_ADMIN_TOKEN" className={inputCls} value={tokenInput} onChange={e => setTokenInput(e.target.value)} />
-            <Button variant="dark" type="submit" className="mt-3.5 w-full">Unlock dashboard</Button>
-            {loginErr && <div className="mt-3 font-bold text-[#b42318]">{loginErr}</div>}
+            {useToken ? (<>
+              <p className="mt-2 text-muted">Enter the secret admin token configured in Railway Variables. Use this only to create the first named admin account.</p>
+              <label htmlFor="token" className="mb-1.5 mt-4 block font-bold">Admin token</label>
+              <input id="token" type="password" autoComplete="current-password" required minLength={20} placeholder="Paste CMA_ADMIN_TOKEN" className={inputCls} value={tokenInput} onChange={e => setTokenInput(e.target.value)} />
+              <Button variant="dark" type="submit" className="mt-3.5 w-full">Unlock dashboard</Button>
+            </>) : recovery ? (<>
+              <p className="mt-2 font-bold text-[#365314]">Two-factor sign-in is on.</p>
+              <p className="mt-1 text-muted">Save these one-time recovery codes somewhere safe, such as a password manager. Each works once if you lose your phone. They are shown only now.</p>
+              <div className="mt-3 grid grid-cols-2 gap-2 rounded-xl bg-[#f3f6f8] p-3 font-mono text-sm">{recovery.map(c => <span key={c}>{c}</span>)}</div>
+              <Button variant="dark" type="submit" className="mt-3.5 w-full">I have saved them. Continue</Button>
+            </>) : step === 'creds' ? (<>
+              <p className="mt-2 text-muted">Sign in with your admin email and password. You will be asked for a code from your authenticator app.</p>
+              <label htmlFor="aemail" className="mb-1.5 mt-4 block font-bold">Email</label>
+              <input id="aemail" type="email" autoComplete="username" required className={inputCls} value={creds.email} onChange={e => setCreds(c => ({ ...c, email: e.target.value }))} />
+              <label htmlFor="apass" className="mb-1.5 mt-3 block font-bold">Password</label>
+              <input id="apass" type="password" autoComplete="current-password" required className={inputCls} value={creds.password} onChange={e => setCreds(c => ({ ...c, password: e.target.value }))} />
+              <Button variant="dark" type="submit" className="mt-3.5 w-full">Continue</Button>
+            </>) : (<>
+              {step === 'enroll' && setup && (<div className="mt-3">
+                <p className="text-muted">First sign-in: scan this QR code with Google Authenticator, Authy or 1Password, then enter the 6-digit code it shows.</p>
+                <img src={setup.qr} alt="Authenticator QR code" width="200" height="200" className="mx-auto my-3 rounded-lg border border-line" />
+                <p className="break-all text-center text-[11px] text-muted">Cannot scan? Enter this key: <span className="font-mono">{setup.secret}</span></p>
+              </div>)}
+              <label htmlFor="acode" className="mb-1.5 mt-4 block font-bold">{step === 'enroll' ? 'Code from the app' : 'Authenticator code (or a recovery code)'}</label>
+              <input id="acode" autoComplete="one-time-code" inputMode="text" required autoFocus className={inputCls} value={creds.code} onChange={e => setCreds(c => ({ ...c, code: e.target.value }))} />
+              <Button variant="dark" type="submit" className="mt-3.5 w-full">{step === 'enroll' ? 'Turn on and sign in' : 'Sign in'}</Button>
+              <button type="button" onClick={() => { setStep('creds'); setSetup(null); setLoginErr(''); }} className="mt-2 w-full text-center text-xs font-bold underline">Start again</button>
+            </>)}
+            {loginErr && <div role="alert" className="mt-3 font-bold text-[#b42318]">{loginErr}</div>}
+            {cfg.tokenLogin && !recovery && <button type="button" onClick={() => { setUseToken(v => !v); setLoginErr(''); }} className="mt-4 w-full text-center text-xs text-muted underline">{useToken ? 'Sign in with email instead' : 'Use the admin access token instead'}</button>}
           </motion.form>
         ) : (
           <motion.div key="app" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
@@ -135,7 +212,7 @@ export default function Admin() {
                 ))}
               </div>
             )}
-            <SlidingTabs id="adminTabs" value={tab} onChange={setTab} className="my-4 w-fit max-w-full overflow-x-auto" tabs={[{ value: 'accounts', label: 'Accounts' }, { value: 'audit', label: 'Admin activity log' }, { value: 'bookings', label: 'Bookings' }, { value: 'applications', label: 'Crew applications' }, { value: 'listings', label: 'Marketplace listings' }, { value: 'identity', label: 'ID verification' }]} />
+            <SlidingTabs id="adminTabs" value={tab} onChange={setTab} className="my-4 w-fit max-w-full overflow-x-auto" tabs={[{ value: 'accounts', label: 'Accounts' }, { value: 'audit', label: 'Admin activity log' }, { value: 'bookings', label: 'Bookings' }, { value: 'applications', label: 'Crew applications' }, { value: 'listings', label: 'Marketplace listings' }, { value: 'identity', label: 'ID verification' }, { value: 'payouts', label: 'Payouts' }, { value: 'professionals', label: 'Verified crew' }, { value: 'admins', label: 'Admins' }]} />
             <AnimatePresence mode="wait">
               <motion.section key={tab} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
                 {tab === 'accounts' && (<>
@@ -187,6 +264,30 @@ export default function Admin() {
                   <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Marketplace listings</h2><Act onClick={loadListings}>Refresh</Act></div>
                   <p className="my-2 text-xs text-muted">All active crew listings are published automatically after account identity verification. Remove individual listings that do not meet platform standards. This does not delete the account or booking history.</p>
                   <div className={cn(card, 'mt-3 p-0')}>{listings && <Table headers={['Listing', 'Account email', 'Category', 'Location', 'Rate / day', 'Status', 'Actions']} rows={listings.map(p => [<><strong>#{p.id} · {p.name}</strong><br />{p.role}</>, p.email || '—', p.category || '—', p.location || '—', '₦' + Number(p.rate || 0).toLocaleString(), p.status === 'approved' && p.is_active ? <Pill k="approved">Published</Pill> : <Pill k="rejected">{p.status === 'removed' ? 'Removed' : p.status || 'Inactive'}</Pill>, p.status === 'approved' && p.is_active ? <Act cls="rounded-[9px] bg-[#b42318] px-3 py-2 text-xs font-bold text-white" onClick={() => removeListing(p.id, p.name, p.role)}>Remove listing</Act> : '—'])} />}</div>
+                </>)}
+                {tab === 'payouts' && (<>
+                  <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Crew payouts</h2><Act onClick={loadPayouts}>Refresh</Act></div>
+                  <p className="my-2 text-xs text-muted">Bookings the client has paid for and confirmed as complete. Send the money to the crew member yourself, then record it here. Recording does not move money.</p>
+                  <h3 className="mt-3 font-bold">Waiting to be paid out</h3>
+                  <div className={cn(card, 'mt-2 p-0')}>{payouts && <Table headers={['Booking', 'Crew', 'Client', 'Crew receives', 'Completed', 'Action']} rows={payouts.due.map(b => [b.reference, b.professional_name, b.client_name, '₦' + Number(b.crew_net).toLocaleString(), date(b.completed_at), <Act key={b.id} onClick={() => recordPayout(b)}>Record payout</Act>])} />}</div>
+                  <h3 className="mt-5 font-bold">Recent payouts</h3>
+                  <div className={cn(card, 'mt-2 p-0')}>{payouts && <Table headers={['Reference', 'Booking', 'Crew', 'Amount', 'Recorded']} rows={payouts.paid.map(p => [p.payout_reference, p.reference, p.professional_name, '₦' + Number(p.amount).toLocaleString(), date(p.created_at)])} />}</div>
+                </>)}
+                {tab === 'professionals' && (<>
+                  <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Verified crew badge</h2><Act onClick={loadPros}>Refresh</Act></div>
+                  <p className="my-2 text-xs text-muted">The badge tells clients you have personally checked this professional's work or credentials.</p>
+                  <div className={cn(card, 'mt-3 p-0')}>{pros && <Table headers={['Listing', 'Category', 'Rating', 'Status', 'Badge']} rows={pros.map(p => [<><strong>#{p.id} · {p.name}</strong><br />{p.role}</>, p.category || '—', p.review_count ? Number(p.rating).toFixed(1) + ' (' + p.review_count + ')' : 'No reviews', p.is_active ? <Pill k="approved">Live</Pill> : <Pill>Paused</Pill>, p.verified ? <Act key={p.id} cls={soft} onClick={() => setVerified(p, false)}>Remove badge</Act> : <Act key={p.id} onClick={() => setVerified(p, true)}>Mark verified</Act>])} />}</div>
+                </>)}
+                {tab === 'admins' && (<>
+                  <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Administrator accounts</h2><Act onClick={loadAdmins}>Refresh</Act></div>
+                  <p className="my-2 text-xs text-muted">Each admin signs in with their own password and an authenticator-app code, and their name appears in the activity log. Once everyone has an account, set <code>ADMIN_TOKEN_AUTH=disabled</code> in Railway to switch off the shared token.</p>
+                  <div className={cn(card, 'mt-3 p-0')}>{admins && <Table headers={['Name', 'Email', 'Two-factor', 'Last sign-in', 'Actions']} rows={admins.map(a => [a.name + (a.disabled ? ' (disabled)' : ''), a.email, a.two_factor ? <Pill k="approved">On</Pill> : <Pill k="pending">Not set up</Pill>, date(a.last_login), <span key={a.id} className="flex gap-2"><Act cls={soft} onClick={() => adminChange(a, { reset_2fa: true }, 'Reset two-factor for ' + a.name + '? They will set it up again at their next sign-in.')}>Reset 2FA</Act><Act cls={soft} onClick={() => adminChange(a, { disabled: !a.disabled }, (a.disabled ? 'Re-enable ' : 'Disable ') + a.name + '?')}>{a.disabled ? 'Enable' : 'Disable'}</Act></span>])} />}</div>
+                  <form onSubmit={createAdmin} className={cn(card, 'mt-4 grid gap-3 sm:grid-cols-3')}>
+                    <div><label htmlFor="nan" className="mb-1 block font-bold">Name</label><input id="nan" required maxLength={60} className={inputCls} value={newAdmin.name} onChange={e => setNewAdmin(v => ({ ...v, name: e.target.value }))} /></div>
+                    <div><label htmlFor="nae" className="mb-1 block font-bold">Email</label><input id="nae" type="email" required className={inputCls} value={newAdmin.email} onChange={e => setNewAdmin(v => ({ ...v, email: e.target.value }))} /></div>
+                    <div><label htmlFor="nap" className="mb-1 block font-bold">Temporary password</label><input id="nap" type="password" required minLength={12} autoComplete="new-password" className={inputCls} value={newAdmin.password} onChange={e => setNewAdmin(v => ({ ...v, password: e.target.value }))} /></div>
+                    <div className="sm:col-span-3"><Button variant="dark" type="submit">Add administrator</Button><span className="ml-3 text-xs text-muted">12+ characters with a letter and a number. Share it privately.</span></div>
+                  </form>
                 </>)}
                 {tab === 'identity' && (<>
                   <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Identity document review</h2><Act onClick={loadIdDocuments}>Refresh</Act></div>
