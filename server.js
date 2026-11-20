@@ -19,6 +19,7 @@ for (const part of String(process.env.CMA_ADMIN_TOKENS || '').split(',')) {
   const i = part.indexOf(':'); const name = part.slice(0, i).trim(); const token = part.slice(i + 1).trim();
   if (i > 0 && name && token.length >= 24) ADMIN_TOKENS.push({ name: name.slice(0, 60), token });
 }
+const ADMIN_TOKEN_AUTH = process.env.ADMIN_TOKEN_AUTH !== 'disabled'; // set to "disabled" once named admin accounts exist
 const SUPPLIER_TIN = process.env.SUPPLIER_TIN || '';
 const PAYMENTS_ENABLED = process.env.PAYMENTS_ENABLED === 'true';
 const BACHS_API_KEY = process.env.BACHS_API_KEY || '';
@@ -308,6 +309,31 @@ async function initDb() {
         mime TEXT NOT NULL,
         data BYTEA NOT NULL,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS admin_users (
+        id SERIAL PRIMARY KEY,
+        name TEXT UNIQUE NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        totp_secret TEXT,
+        totp_last_step BIGINT DEFAULT 0,
+        recovery_hashes TEXT[] DEFAULT '{}',
+        disabled BOOLEAN NOT NULL DEFAULT FALSE,
+        last_login TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS admin_sessions (
+        token_hash TEXT PRIMARY KEY,
+        admin_id INT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS admin_login_tickets (
+        token_hash TEXT PRIMARY KEY,
+        admin_id INT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+        pending_secret TEXT,
+        attempts INT NOT NULL DEFAULT 0,
+        expires_at TIMESTAMP NOT NULL
       );
       ALTER TABLE payments ADD COLUMN IF NOT EXISTS checkout_id VARCHAR(255);
       ALTER TABLE payments ADD COLUMN IF NOT EXISTS checkout_url TEXT;
@@ -998,18 +1024,51 @@ app.get('/api/crew/bookings', requireUser, wrap(async (req, res) => {
 
 /* ---------------- admin guard ---------------- */
 const adminFailLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: 'draft-7', legacyHeaders: false, skipSuccessfulRequests: true, requestWasSuccessful: (req, res) => res.statusCode !== 401, message: { error: 'Too many failed attempts. Try again later.' } });
-function requireAdmin(req, res, next) {
-  if (!ADMIN_TOKENS.length) return res.status(503).json({ error: 'Admin console is disabled. Set CMA_ADMIN_TOKEN (or CMA_ADMIN_TOKENS) in Railway Variables.' });
-  const a = crypto.createHash('sha256').update(String(req.get('x-admin-token') || '')).digest();
-  let who = null;
-  for (const t of ADMIN_TOKENS) { // check every entry so timing does not reveal which one matched
-    const b = crypto.createHash('sha256').update(t.token).digest();
-    if (crypto.timingSafeEqual(a, b) && !who) who = t.name;
-  }
-  if (!who) return res.status(401).json({ error: 'Unauthorized' });
-  req.adminName = who;
-  next();
+/* ---- TOTP (RFC 6238: SHA-1, 30 s, 6 digits) ---- */
+const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+function b32enc(buf) { let bits = '', out = ''; for (const x of buf) bits += x.toString(2).padStart(8, '0'); for (let i = 0; i < bits.length; i += 5) out += B32[parseInt(bits.slice(i, i + 5).padEnd(5, '0'), 2)]; return out; }
+function b32dec(str) { let bits = ''; for (const c of String(str).replace(/=+$/, '').toUpperCase()) { const v = B32.indexOf(c); if (v < 0) throw new Error('bad base32'); bits += v.toString(2).padStart(5, '0'); } const out = []; for (let i = 0; i + 8 <= bits.length; i += 8) out.push(parseInt(bits.slice(i, i + 8), 2)); return Buffer.from(out); }
+function hotp(secret, counter) { const c = Buffer.alloc(8); c.writeBigUInt64BE(BigInt(counter)); const h = crypto.createHmac('sha1', secret).update(c).digest(); const o = h[19] & 15; return String((((h[o] & 0x7f) << 24) | (h[o + 1] << 16) | (h[o + 2] << 8) | h[o + 3]) % 1000000).padStart(6, '0'); }
+// Returns the matched time step (so a code cannot be replayed) or null.
+function totpMatch(secretB32, code, lastStep) {
+  if (!/^\d{6}$/.test(String(code))) return null;
+  const secret = b32dec(secretB32), now = Math.floor(Date.now() / 30000); let hit = null;
+  for (const d of [-1, 0, 1]) { const st = now + d; if (st > Number(lastStep || 0) && crypto.timingSafeEqual(Buffer.from(hotp(secret, st)), Buffer.from(String(code)))) hit = st; }
+  return hit;
 }
+function totpKey() {
+  const raw = String(process.env.ADMIN_2FA_KEY || process.env.ID_ENCRYPTION_KEY || '').trim();
+  if (!/^[a-f0-9]{64}$/i.test(raw)) fail(503, 'Two-factor setup needs ADMIN_2FA_KEY (64 hex characters) in the server settings.');
+  return Buffer.from(raw, 'hex');
+}
+function sealSecret(plain) { const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', totpKey(), iv); const d = Buffer.concat([c.update(plain, 'utf8'), c.final()]); return [iv, c.getAuthTag(), d].map(x => x.toString('base64')).join('.'); }
+function openSecret(sealed) { const [iv, tag, d] = String(sealed).split('.').map(x => Buffer.from(x, 'base64')); const c = crypto.createDecipheriv('aes-256-gcm', totpKey(), iv); c.setAuthTag(tag); return Buffer.concat([c.update(d), c.final()]).toString('utf8'); }
+
+const ADMIN_COOKIE = 'cma_admin', ADMIN_SESSION_HOURS = 8;
+async function adminFromRequest(req) {
+  const tok = parseCookies(req)[ADMIN_COOKIE]; if (!tok) return null;
+  const r = await pool.query(`SELECT a.id, a.name, a.email FROM admin_sessions s JOIN admin_users a ON a.id = s.admin_id WHERE s.token_hash = $1 AND s.expires_at > NOW() AND NOT a.disabled`, [sha256(tok)]);
+  return r.rows[0] || null;
+}
+const requireAdmin = wrap(async (req, res, next) => {
+  const session = await adminFromRequest(req);
+  if (session) {
+    // Cookie auth needs a custom header on changes, which a cross-site form cannot send (SameSite=Strict is the first line of defence).
+    if (!['GET', 'HEAD'].includes(req.method) && req.get('x-requested-with') !== 'cma-admin') return res.status(403).json({ error: 'Missing request header.' });
+    req.adminName = session.name; req.adminId = session.id; return next();
+  }
+  if (!ADMIN_TOKENS.length && !(await pool.query('SELECT 1 FROM admin_users LIMIT 1')).rowCount) return res.status(503).json({ error: 'Admin console is disabled. Set CMA_ADMIN_TOKEN in the server settings to create the first admin account.' });
+  if (ADMIN_TOKEN_AUTH && ADMIN_TOKENS.length) {
+    const a = crypto.createHash('sha256').update(String(req.get('x-admin-token') || '')).digest();
+    let who = null;
+    for (const t of ADMIN_TOKENS) { // check every entry so timing does not reveal which one matched
+      const b = crypto.createHash('sha256').update(t.token).digest();
+      if (crypto.timingSafeEqual(a, b) && !who) who = t.name;
+    }
+    if (who) { req.adminName = who; req.adminLegacy = true; return next(); }
+  }
+  return res.status(401).json({ error: 'Unauthorized' });
+});
 const adminGuard = [adminFailLimiter, requireAdmin];
 async function audit(db, req, action, target, details) {
   await db.query(
@@ -1836,7 +1895,108 @@ app.post('/api/crew-applications', requireUser, requireVerifiedEmail, wrap(async
   res.status(201).json({ success: true, application: result.application, listing: listingView(result.professional) });
 }));
 
-/* ---------------- admin API (x-admin-token) ---------------- */
+/* ---------------- admin accounts: password + authenticator app ---------------- */
+const adminLoginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 12, standardHeaders: 'draft-7', legacyHeaders: false, skipSuccessfulRequests: true, requestWasSuccessful: (req, res) => res.statusCode < 400, message: { error: 'Too many attempts. Try again in a few minutes.' } });
+const adminView = a => ({ id: a.id, name: a.name, email: a.email });
+app.get('/api/admin/auth/config', wrap(async (req, res) => {
+  const n = (await pool.query('SELECT COUNT(*)::int AS n FROM admin_users')).rows[0].n;
+  res.json({ accounts: n > 0, tokenLogin: ADMIN_TOKEN_AUTH && ADMIN_TOKENS.length > 0 });
+}));
+app.post('/api/admin/auth/login', adminLoginLimiter, wrap(async (req, res) => {
+  const email = str(req.body.email, 254).toLowerCase(), password = String(req.body.password || '').slice(0, 200);
+  const a = (await pool.query('SELECT * FROM admin_users WHERE email = $1', [email])).rows[0];
+  const ok = await bcrypt.compare(password, a ? a.password_hash : DUMMY_HASH);
+  if (!a || a.disabled || !ok) return res.status(401).json({ error: 'Incorrect email or password.' });
+  let pending = null, setup = null;
+  if (!a.totp_secret) {
+    const secret = b32enc(crypto.randomBytes(20)); pending = sealSecret(secret);
+    const uri = 'otpauth://totp/' + encodeURIComponent('Crew Management:' + a.email) + '?secret=' + secret + '&issuer=' + encodeURIComponent('Crew Management');
+    setup = { secret, otpauth: uri, qr: await require('qrcode').toDataURL(uri, { margin: 1, width: 220 }) };
+  }
+  const ticket = crypto.randomBytes(24).toString('hex');
+  await pool.query('DELETE FROM admin_login_tickets WHERE admin_id = $1 OR expires_at < NOW()', [a.id]);
+  await pool.query(`INSERT INTO admin_login_tickets (token_hash, admin_id, pending_secret, expires_at) VALUES ($1,$2,$3, NOW() + INTERVAL '10 minutes')`, [sha256(ticket), a.id, pending]);
+  res.json({ success: true, step: setup ? 'enroll' : 'code', ticket, setup });
+}));
+app.post('/api/admin/auth/verify', adminLoginLimiter, wrap(async (req, res) => {
+  const code = String(req.body.code || '').replace(/\s/g, '').toLowerCase().slice(0, 40);
+  const out = await withTx(async db => {
+    const t = (await db.query(`SELECT * FROM admin_login_tickets WHERE token_hash = $1 AND expires_at > NOW() FOR UPDATE`, [sha256(String(req.body.ticket || ''))])).rows[0];
+    if (!t) fail(401, 'This sign-in has expired. Start again.');
+    if (t.attempts >= 5) { await db.query('DELETE FROM admin_login_tickets WHERE token_hash = $1', [t.token_hash]); fail(401, 'Too many wrong codes. Start again.'); }
+    await db.query('UPDATE admin_login_tickets SET attempts = attempts + 1 WHERE token_hash = $1', [t.token_hash]);
+    const a = (await db.query('SELECT * FROM admin_users WHERE id = $1 FOR UPDATE', [t.admin_id])).rows[0];
+    if (!a || a.disabled) fail(401, 'This account is disabled.');
+    let recovery = null, usedRecovery = false;
+    if (t.pending_secret) {
+      const step = totpMatch(openSecret(t.pending_secret), code, 0);
+      if (step === null) fail(401, 'That code is not right. Check the time on your phone and try the next code.');
+      recovery = Array.from({ length: 8 }, () => crypto.randomBytes(5).toString('hex').replace(/^(.{5})(.{5})$/, '$1-$2'));
+      await db.query('UPDATE admin_users SET totp_secret = $1, totp_last_step = $2, recovery_hashes = $3 WHERE id = $4', [t.pending_secret, step, recovery.map(sha256), a.id]);
+    } else if (/^\d{6}$/.test(code)) {
+      const step = totpMatch(openSecret(a.totp_secret), code, a.totp_last_step);
+      if (step === null) fail(401, 'That code is not right or was already used.');
+      await db.query('UPDATE admin_users SET totp_last_step = $1 WHERE id = $2', [step, a.id]);
+    } else {
+      const h = sha256(code);
+      if (!(a.recovery_hashes || []).includes(h)) fail(401, 'That code is not right.');
+      await db.query('UPDATE admin_users SET recovery_hashes = array_remove(recovery_hashes, $1) WHERE id = $2', [h, a.id]);
+      usedRecovery = true;
+    }
+    await db.query('DELETE FROM admin_login_tickets WHERE token_hash = $1', [t.token_hash]);
+    const token = crypto.randomBytes(32).toString('hex');
+    await db.query(`INSERT INTO admin_sessions (token_hash, admin_id, expires_at) VALUES ($1,$2, NOW() + ($3 || ' hours')::interval)`, [sha256(token), a.id, String(ADMIN_SESSION_HOURS)]);
+    await db.query('UPDATE admin_users SET last_login = NOW() WHERE id = $1', [a.id]);
+    await audit(db, { adminName: a.name, ip: req.ip }, usedRecovery ? 'admin_login_recovery_code' : 'admin_login', null, {});
+    return { token, admin: adminView(a), recovery, usedRecovery };
+  });
+  res.cookie(ADMIN_COOKIE, out.token, { httpOnly: true, sameSite: 'strict', secure: process.env.NODE_ENV === 'production', maxAge: ADMIN_SESSION_HOURS * 3600000, path: '/api/admin' });
+  res.json({ success: true, admin: out.admin, recovery_codes: out.recovery, used_recovery_code: out.usedRecovery });
+}));
+app.get('/api/admin/auth/me', wrap(async (req, res) => { const a = await adminFromRequest(req); res.json({ admin: a ? adminView(a) : null }); }));
+app.post('/api/admin/auth/logout', wrap(async (req, res) => {
+  const tok = parseCookies(req)[ADMIN_COOKIE]; if (tok) await pool.query('DELETE FROM admin_sessions WHERE token_hash = $1', [sha256(tok)]);
+  res.clearCookie(ADMIN_COOKIE, { path: '/api/admin' }); res.json({ success: true });
+}));
+
+/* ---------------- admin API (session cookie, or x-admin-token while enabled) ---------------- */
+app.get('/api/admin/accounts', adminGuard, wrap(async (req, res) => {
+  res.json({ accounts: (await pool.query('SELECT id, name, email, disabled, last_login, (totp_secret IS NOT NULL) AS two_factor, created_at FROM admin_users ORDER BY id')).rows });
+}));
+app.post('/api/admin/accounts', adminGuard, wrap(async (req, res) => {
+  const name = str(req.body.name, 60), email = str(req.body.email, 254).toLowerCase(), password = String(req.body.password || '');
+  if (name.length < 2 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(400, 'Enter the admin\'s name and a valid email.');
+  if (password.length < 12 || password.length > 200 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) fail(400, 'Admin passwords need at least 12 characters with a letter and a number.');
+  totpKey(); // fail early if 2FA cannot be set up
+  const hash = await bcrypt.hash(password, 12);
+  const row = (await pool.query('INSERT INTO admin_users (name, email, password_hash) VALUES ($1,$2,$3) RETURNING id, name, email', [name, email, hash])).rows[0];
+  await audit(pool, req, 'admin_account_created', null, { admin: row.name, email: row.email });
+  res.status(201).json({ success: true, account: row });
+}));
+app.patch('/api/admin/accounts/:id', adminGuard, wrap(async (req, res) => {
+  const id = toInt(req.params.id); if (!id) fail(400, 'Invalid id.');
+  if (req.adminId === id) fail(400, 'You cannot change your own account here.');
+  const reset2fa = req.body.reset_2fa === true, disabled = typeof req.body.disabled === 'boolean' ? req.body.disabled : null;
+  if (!reset2fa && disabled === null) fail(400, 'Nothing to change.');
+  const row = await withTx(async db => {
+    const a = (await db.query('SELECT * FROM admin_users WHERE id = $1 FOR UPDATE', [id])).rows[0]; if (!a) fail(404, 'Admin not found.');
+    if (disabled !== null) await db.query('UPDATE admin_users SET disabled = $1 WHERE id = $2', [disabled, id]);
+    if (reset2fa) await db.query(`UPDATE admin_users SET totp_secret = NULL, totp_last_step = 0, recovery_hashes = '{}' WHERE id = $1`, [id]);
+    if (reset2fa || disabled) await db.query('DELETE FROM admin_sessions WHERE admin_id = $1', [id]);
+    await audit(db, req, reset2fa ? 'admin_2fa_reset' : disabled ? 'admin_disabled' : 'admin_enabled', null, { admin: a.name });
+    return a;
+  });
+  res.json({ success: true });
+}));
+app.get('/api/admin/professionals', adminGuard, wrap(async (req, res) => {
+  const { rows } = await pool.query(`SELECT p.id, p.name, p.role, p.category, p.verified, p.is_active, p.rating, (SELECT COUNT(*)::int FROM reviews r WHERE r.professional_id = p.id) AS review_count FROM professionals p ORDER BY p.id`);
+  res.json({ professionals: rows });
+}));
+app.get('/api/admin/payouts', adminGuard, wrap(async (req, res) => {
+  const due = (await pool.query(`SELECT b.id, b.reference, b.client_name, b.crew_net, b.completed_at, p.name AS professional_name FROM bookings b JOIN professionals p ON p.id = b.professional_id WHERE b.status = 'completed' AND b.payment_status = 'paid' AND COALESCE(b.payout_status,'') <> 'paid' ORDER BY b.completed_at NULLS LAST, b.id`)).rows;
+  const paid = (await pool.query(`SELECT po.id, po.booking_id, po.amount, po.payout_reference, po.created_at, p.name AS professional_name, b.reference FROM payouts po JOIN professionals p ON p.id = po.professional_id LEFT JOIN bookings b ON b.id = po.booking_id ORDER BY po.id DESC LIMIT 50`)).rows;
+  res.json({ due: due.map(b => ({ ...b, reference: b.reference || refFor(b.id) })), paid: paid.map(b => ({ ...b, reference: b.reference || refFor(b.booking_id) })) });
+}));
 app.get('/api/admin/overview', adminGuard, wrap(async (req, res) => {
   const { rows } = await pool.query(`
     SELECT COUNT(*)::int AS total,
@@ -2033,13 +2193,17 @@ app.post('/api/admin/payouts', adminGuard, wrap(async (req, res) => {
     const b = (await db.query('SELECT * FROM bookings WHERE id = $1 FOR UPDATE', [bookingId])).rows[0];
     if (!b) fail(404, 'Booking not found.');
     if (b.payment_status !== 'paid') fail(409, 'Cannot pay out a booking that has not been paid.');
+    if (b.status !== 'completed') fail(409, 'A payout is only released after the client confirms the job is complete.');
     if (b.payout_status === 'paid') fail(409, 'This booking has already been paid out.');
     const ins = await db.query(
       `INSERT INTO payouts (professional_id, booking_id, amount, status, payout_reference) VALUES ($1,$2,$3,'paid',$4) RETURNING *`,
       [b.professional_id, b.id, b.crew_net, `PO-${Date.now()}`]);
     await db.query(`UPDATE bookings SET payout_status = 'paid' WHERE id = $1`, [b.id]);
-    return ins.rows[0];
+    await audit(db, req, 'payout_recorded', null, { booking: b.reference || refFor(b.id), amount: b.crew_net, payout_reference: ins.rows[0].payout_reference });
+    return { ...ins.rows[0], _b: b, _crew: (await crewUserIdsFor(db, b.professional_id))[0] };
   });
+  emailUsers([payout._crew], 'Payout sent (' + (payout._b.reference || refFor(payout._b.id)) + ')', ['Your payout of ' + naira(payout.amount) + ' for this booking has been sent.'], '/?inbox=' + payout._b.id, 'po' + payout.id).catch(() => {});
+  delete payout._b; delete payout._crew;
   res.json({ success: true, payout });
 }));
 
@@ -2048,6 +2212,7 @@ app.post('/api/admin/verify-professional/:id', adminGuard, wrap(async (req, res)
   if (typeof req.body.verified !== 'boolean') fail(400, 'verified must be true or false.');
   const { rows } = await pool.query('UPDATE professionals SET verified = $1 WHERE id = $2 RETURNING *', [req.body.verified, id]);
   if (!rows[0]) fail(404, 'Professional not found.');
+  await audit(pool, req, req.body.verified ? 'professional_verified' : 'professional_unverified', null, { professional: rows[0].name, id });
   res.json({ success: true, professional: rows[0] });
 }));
 
