@@ -66,7 +66,7 @@ app.use((req, res, next) => {
   next();
 });
 app.use('/api/', rateLimit({ windowMs: 15 * 60 * 1000, limit: 300, standardHeaders: 'draft-7', legacyHeaders: false }));
-app.use(express.static(path.join(__dirname, 'dist'), { dotfiles: 'ignore' }));
+app.use(express.static(path.join(__dirname, 'dist'), { dotfiles: 'ignore', index: false }));
 
 /* ---------------- helpers ---------------- */
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
@@ -1299,7 +1299,7 @@ async function insertChatMessage(db, b, user, kind, text, offer, recipientId) {
   return rows[0];
 }
 function pushChat(b, row, recipientId, user) {
-  for (const sub of chatSubs.get(b.id) || []) sub.write('data: ' + JSON.stringify(row) + '\n\n');
+  broadcastChat(b.id, row);
   if (recipientId && Number(recipientId) !== Number(user.id)) {
     emitMessageNotification(recipientId, { type: 'message', booking_id: b.id, reference: b.reference || refFor(b.id), sender_name: user.name, preview: row.masked_content, created_at: row.created_at });
     if (row.kind === 'text' || !row.kind) emailNewMessage(recipientId, b, user.name, row.masked_content).catch(() => {});
@@ -1427,7 +1427,7 @@ async function expireStaleRequests() {
       await pool.query(`UPDATE messages SET offer = jsonb_set(offer, '{status}', '"superseded"') WHERE booking_id = $1 AND kind IN ('request','offer') AND offer->>'status' = 'pending'`, [b.id]);
       const sys = (await pool.query(`INSERT INTO messages (booking_id,sender_type,sender_name,masked_content,kind) VALUES ($1,'system','System',$2,'system') RETURNING *`,
         [b.id, 'This request expired because nobody answered within ' + REQUEST_EXPIRY_HOURS + ' hours.'])).rows[0];
-      for (const sub of chatSubs.get(b.id) || []) sub.write('data: ' + JSON.stringify(sys) + '\n\n');
+      broadcastChat(b.id, sys);
       const people = [Number(b.user_id), ...(await crewUserIdsFor(pool, b.professional_id))];
       notifyBooking(people, b, 'Request expired', (b.reference || refFor(b.id)) + ' expired with no answer.');
     } catch (e) { console.warn('expire note:', e.message); }
@@ -1556,7 +1556,7 @@ async function settleFromBachs(payment) {
     return { status: 'verified', booking, sys, crewId };
   }).then(r => {
     if (r.sys) {
-      for (const sub of chatSubs.get(r.booking.id) || []) sub.write('data: ' + JSON.stringify(r.sys) + '\n\n');
+      broadcastChat(r.booking.id, r.sys);
       for (const uid of [Number(r.booking.user_id), r.crewId]) if (uid) emitMessageNotification(uid, { type: 'message', booking_id: r.booking.id, reference: r.booking.reference || refFor(r.booking.id), sender_name: 'Payment received', preview: r.sys.masked_content, created_at: r.sys.created_at });
       afterPayment(r.booking, r.crewId).catch(e => console.warn('afterPayment:', e.message));
     }
@@ -1673,11 +1673,29 @@ const maskContact = text => text
 
 /* ---------------- inbox and live account notifications ---------------- */
 const messageNotificationSubs = new Map();
-function emitMessageNotification(userId,payload){
-  if(!userId) return;
-  for(const sub of messageNotificationSubs.get(Number(userId))||[]){
-    try{sub.write('data: '+JSON.stringify(payload)+'\n\n');}catch(e){}
-  }
+/* Live updates reach every replica through Postgres LISTEN/NOTIFY: deliver to our own SSE clients now and tell the others. */
+const INSTANCE_ID = crypto.randomBytes(6).toString('hex');
+function deliverLocal(evt) {
+  if (evt.t === 'chat') { for (const sub of chatSubs.get(evt.b) || []) { try { sub.write('data: ' + JSON.stringify(evt.row) + '\n\n'); } catch (e) { /* client gone */ } } }
+  else if (evt.t === 'note') { for (const sub of messageNotificationSubs.get(Number(evt.u)) || []) { try { sub.write('data: ' + JSON.stringify(evt.p) + '\n\n'); } catch (e) { /* client gone */ } } }
+}
+function relay(evt) {
+  deliverLocal(evt);
+  const payload = JSON.stringify({ i: INSTANCE_ID, e: evt });
+  if (payload.length > 7500) { console.warn('Live event too large to relay to other replicas:', evt.t); return; } // NOTIFY payloads are capped at 8000 bytes
+  pool.query('SELECT pg_notify($1, $2)', ['cma_events', payload]).catch(() => {});
+}
+function broadcastChat(bookingId, row) { relay({ t: 'chat', b: bookingId, row }); }
+function emitMessageNotification(userId, payload) { if (userId) relay({ t: 'note', u: Number(userId), p: payload }); }
+let listenerClient = null;
+async function startEventListener() {
+  try {
+    const client = new (require('pg').Client)({ connectionString: DATABASE_URL, ssl: dbSsl() });
+    client.on('error', () => { try { client.end(); } catch (e) { /* already closed */ } });
+    client.on('end', () => { if (listenerClient === client) { listenerClient = null; setTimeout(startEventListener, 3000).unref(); } });
+    client.on('notification', m => { try { const d = JSON.parse(m.payload); if (d.i !== INSTANCE_ID) deliverLocal(d.e); } catch (e) { /* ignore malformed */ } });
+    await client.connect(); await client.query('LISTEN cma_events'); listenerClient = client;
+  } catch (e) { console.warn('Live-event listener failed, retrying:', e.message); setTimeout(startEventListener, 5000).unref(); }
 }
 async function getOtherParticipantId(db,user,booking){
   if(ownsBooking(user,booking)){
@@ -1751,7 +1769,7 @@ app.post('/api/bookings/:id/messages', requireUser, wrap(async (req, res) => {
   const { rows } = await pool.query(
     'INSERT INTO messages (booking_id,sender_type,sender_name,masked_content,sender_user_id,recipient_user_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
     [b.id,senderType,req.user.name,maskContact(content),req.user.id,recipientId]);
-  for (const sub of chatSubs.get(b.id) || []) sub.write('data: '+JSON.stringify(rows[0])+'\n\n');
+  broadcastChat(b.id, rows[0]);
   if (recipientId && recipientId !== Number(req.user.id)) {
     emitMessageNotification(recipientId,{type:'message',booking_id:b.id,reference:b.reference||refFor(b.id),sender_name:req.user.name,preview:rows[0].masked_content,created_at:rows[0].created_at});
     emailNewMessage(recipientId, b, req.user.name, rows[0].masked_content).catch(() => {});
@@ -1829,7 +1847,7 @@ app.post('/api/bookings/:id/offers/:messageId/respond', requireUser, wrap(async 
     const fresh = (await db.query('SELECT * FROM bookings WHERE id = $1', [b.id])).rows[0];
     return { b: fresh, updated, sys, other };
   });
-  for (const sub of chatSubs.get(out.b.id) || []) sub.write('data: ' + JSON.stringify(out.updated) + '\n\n');
+  broadcastChat(out.b.id, out.updated);
   pushChat(out.b, out.sys, out.other, req.user);
   res.json({ success: true, booking: out.b });
 }));
@@ -2219,8 +2237,14 @@ app.post('/api/admin/verify-professional/:id', adminGuard, wrap(async (req, res)
 /* ---------------- fallbacks ---------------- */
 app.use('/api', (req, res) => res.status(404).json({ error: `API route not found: ${req.method} ${req.originalUrl.split('?')[0]}` }));
 
+// Link previews need absolute image URLs, so the page is served with the real origin filled in.
+let indexTemplate = null;
 app.get('*', (req, res, next) => {
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'), err => { if (err) next(err); });
+  try {
+    if (!indexTemplate) indexTemplate = require('fs').readFileSync(path.join(__dirname, 'dist', 'index.html'), 'utf8');
+  } catch (e) { return next(e); }
+  const origin = APP_URL || (req.protocol + '://' + req.get('host'));
+  res.type('html').send(indexTemplate.split('__APP_URL__').join(String(origin).replace(/[^\w:./-]/g, '')));
 });
 
 app.use((err, req, res, next) => {
@@ -2237,10 +2261,11 @@ app.use((err, req, res, next) => {
 
 initDb().then(() => {
   const server = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  startEventListener();
   setTimeout(() => expireStaleRequests().catch(e => console.warn('expiry:', e.message)), 30000).unref?.();
   setInterval(() => expireStaleRequests().catch(e => console.warn('expiry:', e.message)), 30 * 60 * 1000).unref?.();
   setInterval(() => pool.query('DELETE FROM sessions WHERE expires_at < NOW()').catch(() => {}), 6 * 3600 * 1000).unref();
-  const shutdown = () => server.close(() => pool.end().finally(() => process.exit(0)));
+  const shutdown = () => server.close(() => { const l = listenerClient; listenerClient = null; (l ? l.end() : Promise.resolve()).catch(() => {}).finally(() => pool.end().finally(() => process.exit(0))); });
   process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 }).catch(err => {
   console.error('Database initialization failed:', err);
