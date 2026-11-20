@@ -9,7 +9,8 @@
     "build": "npx vite build --config client/vite.config.mjs",
     "dev": "node --watch server.js",
     "dev:client": "vite --config client/vite.config.mjs",
-    "check": "node --check server.js"
+    "check": "node --check server.js",
+    "test": "node --test test/api.test.js"
   },
   "engines": {
     "node": ">=20"
