@@ -1119,10 +1119,10 @@ app.post('/api/crew/listings', requireUser, requireVerifiedEmail, wrap(async (re
   const identity = (await pool.query('SELECT is_verified FROM users WHERE id = $1', [req.user.id])).rows[0];
   if (!identity?.is_verified) fail(403, 'Verify your identity before adding another public listing.');
   const professional = await withTx(async db => {
-    const appRow = (await db.query(`INSERT INTO crew_applications (user_id,name,full_name,email,role,location,portfolio,portfolio_url,bio,status) VALUES ($1,$2,$2,$3,$4,$5,$6,$6,$7,'approved') RETURNING id`, [req.user.id, req.user.name, req.user.email, role, location, showreel || '', bio])).rows[0];
+    const appRow = (await db.query(`INSERT INTO crew_applications (user_id,name,full_name,email,role,location,portfolio,portfolio_url,bio,status) VALUES ($1,$2::text,$2::text,$3,$4,$5,$6::text,$6::text,$7,'approved') RETURNING id`, [req.user.id, req.user.name, req.user.email, role, location, showreel || '', bio])).rows[0];
     const skillsCast = SKILLS_IS_JSON ? 'jsonb' : 'text[]';
     const skillsValue = SKILLS_IS_JSON ? JSON.stringify([...new Set(skills)]) : [...new Set(skills)];
-    const p = (await db.query(`INSERT INTO professionals (application_id,name,role,category,location,bio,\"desc\",description,showreel,rate,daily_rate,rate_full_day,rate_half_day,skills,verified,status,credits,active,is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$8,$9::numeric,$9::numeric,$9::numeric,$10::numeric,$11::${skillsCast},$12,'approved','',TRUE,TRUE) RETURNING *`, ['app-' + appRow.id, req.user.name, role, category, location, bio, bio.slice(0,200), showreel || null, rate, Math.round(rate/2), skillsValue, true])).rows[0];
+    const p = (await db.query(`INSERT INTO professionals (application_id,name,role,category,location,bio,\"desc\",description,showreel,rate,daily_rate,rate_full_day,rate_half_day,skills,verified,status,credits,active,is_active) VALUES ($1,$2,$3,$4,$5,$6::text,$7,$6::text,$8,$9::numeric,$9::numeric,$9::numeric,$10::numeric,$11::${skillsCast},$12,'approved','',TRUE,TRUE) RETURNING *`, ['app-' + appRow.id, req.user.name, role, category, location, bio, bio.slice(0,200), showreel || null, rate, Math.round(rate/2), skillsValue, true])).rows[0];
     await db.query('UPDATE crew_applications SET professional_id = $1 WHERE id = $2', [p.id, appRow.id]);
     return p;
   });
@@ -1821,13 +1821,13 @@ app.post('/api/crew-applications', requireUser, requireVerifiedEmail, wrap(async
     if (existing.length) fail(409, 'You already have a crew profile. Add another listing from your Crew Listing dashboard.');
     const application = (await db.query(
       `INSERT INTO crew_applications (user_id,name,full_name,email,role,location,portfolio,portfolio_url,bio,status)
-       VALUES ($1,$2,$2,$3,$4,$5,$6,$6,$7,'approved') RETURNING *`,
+       VALUES ($1,$2::text,$2::text,$3,$4,$5,$6::text,$6::text,$7,'approved') RETURNING *`,
       [req.user.id, req.user.name, req.user.email, role, location, portfolio || '', bio])).rows[0];
     const skillsCast = SKILLS_IS_JSON ? 'jsonb' : 'text[]';
     const emptySkills = SKILLS_IS_JSON ? '[]' : [];
     const professional = (await db.query(
       `INSERT INTO professionals (application_id,name,role,category,location,bio,"desc",description,showreel,rate,daily_rate,rate_full_day,rate_half_day,skills,verified,status,credits,active,is_active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$8,$9::numeric,$9::numeric,$9::numeric,$10::numeric,$11::${skillsCast},TRUE,'approved','',TRUE,TRUE)
+       VALUES ($1,$2,$3,$4,$5,$6::text,$7,$6::text,$8,$9::numeric,$9::numeric,$9::numeric,$10::numeric,$11::${skillsCast},TRUE,'approved','',TRUE,TRUE)
        RETURNING *`,
       ['app-' + application.id, req.user.name, role, category, location, bio, bio.slice(0,200), portfolio || null, dailyRate, Math.round(dailyRate / 2), emptySkills])).rows[0];
     await db.query('UPDATE crew_applications SET professional_id = $1 WHERE id = $2', [professional.id, application.id]);
@@ -1977,6 +1977,9 @@ app.delete('/api/admin/listings/:id', adminGuard, wrap(async (req, res) => {
   await withTx(async db => {
     const p = (await db.query(`SELECT p.id,ca.user_id,p.name,p.role FROM professionals p LEFT JOIN crew_applications ca ON p.application_id = 'app-' || ca.id::text WHERE p.id = $1 FOR UPDATE OF p`, [id])).rows[0];
     if (!p) fail(404, 'Listing not found.');
+    const live = (await db.query(`SELECT COUNT(*)::int AS n FROM bookings WHERE professional_id = $1 AND status = ANY($2::text[])`, [id, BLOCKING_STATUSES.filter(x => x !== 'completed')])).rows[0].n;
+    if (live) fail(409, 'This listing has confirmed or active bookings. Resolve or cancel them before removing it.');
+    await db.query(`UPDATE bookings SET status = 'cancelled', cancelled_by = 'admin', cancel_reason = 'Listing removed by an administrator' WHERE professional_id = $1 AND status IN ('awaiting_review','pending','counter_pending')`, [id]);
     // Keep the record and booking history, but remove it from all public marketplace queries.
     await db.query("UPDATE professionals SET status = 'removed', active = FALSE, is_active = FALSE WHERE id = $1", [id]);
     await db.query('DELETE FROM professional_photos WHERE professional_id = $1', [id]);
