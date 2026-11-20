@@ -343,13 +343,13 @@ export function CrewDashboard({ onBack, onJoin, toast, user, onMessages }) {
       </div>
       {error ? <div className="rounded-2xl border border-line bg-white p-7 text-[13px] text-muted">{error} <Button size="sm" variant="ghost" onClick={load}>Try again</Button></div>
         : data === null ? <div className="rounded-2xl border border-line bg-white p-7 text-[13px] text-muted">Loading your crew requests…</div>
-        : !data.hasProfile ? (
-          <div className="rounded-2xl border border-line bg-white p-7 text-[13px] text-muted">
+        : !data.hasProfile ? (<>
+          <div className="mb-5 rounded-2xl border border-line bg-white p-7 text-[13px] text-muted">
             <strong className="block text-base text-ink">{appStatus === 'pending' ? 'Your application is under review' : appStatus === 'rejected' ? 'Your last application was not approved' : 'Create your first crew listing'}</strong>
             <p className="mt-1.5">Your account is ready for crew listings. Add your role, category, rate and portfolio below. Once identity verification is complete, your listing will be published automatically.</p>
           </div>
           <CrewListing toast={toast} />
-        ) : (<>
+        </>) : (<>
           <div className="mb-5 grid grid-cols-2 gap-3.5 sm:grid-cols-3">
             {[['Total requests', rows.length], ['Waiting for your reply', waiting.length]].map(([l, v], i) => (
               <div key={l} className="rounded-2xl border border-line bg-white p-3.5 sm:p-5"><small className="text-[11px] text-muted">{l}</small><strong className="mt-2 block font-display text-[23px] font-extrabold tracking-[-.05em] sm:text-[27px]"><AnimatedNumber value={v} /></strong></div>
