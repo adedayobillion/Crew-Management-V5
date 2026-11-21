@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import CameraArt from './CameraArt.jsx';
+import CrewListing from './CrewListing.jsx';
 import { AnimatedNumber, Button, Field, Marquee, Reveal, SkeletonCard, SpotlightCard, Tagline, inputCls } from './ui.jsx';
 import { cn, http, naira, postJSON } from './lib.js';
 import { ArrowDownRight, Brush, ArrowLeft, ArrowLeftRight, ArrowUpRight, Camera, Clapperboard, Heart, Lightbulb, Mail, Menu, Mic, Scissors, ShieldCheck, Sparkles, UserRound, X } from 'lucide-react';
@@ -28,7 +29,7 @@ export function Nav({ user, onLogin, onLogout, onDashboard, onCrewDashboard, onS
   const [open, setOpen] = useState(false);
   const crewMode = !!user && user.accountType === 'crew';
   const workspace = crewMode ? onCrewDashboard : onDashboard;
-  const workspaceLabel = crewMode ? 'Crew requests' : 'My bookings';
+  const workspaceLabel = crewMode ? 'My listings' : 'My bookings';
   const links = [['#discover', 'Find professionals'], ['#how', 'How it works'], ['#trust', 'Safe bookings'], ['#join', 'Join as crew']];
   const go = fn => e => { e.preventDefault(); setOpen(false); fn(); };
   return (
@@ -320,58 +321,16 @@ export function Dashboard({ onBack, onJoin, openAuth, toast, user, onMessages })
   );
 }
 
-/* ---------- Crew workspace ---------- */
-export function CrewDashboard({ onBack, onJoin, toast, user, onMessages }) {
-  const [chat, setChat] = useState(null);
-  const [data, setData] = useState(null); const [error, setError] = useState(''); const [busy, setBusy] = useState(0);
-  async function load() {
-    setData(null); setError('');
-    const r = await http('/api/crew/bookings').catch(() => ({ ok: false, data: { error: 'Could not connect to backend.' } }));
-    if (!r.ok) { setError(r.data.error || 'Could not load your crew requests.'); return; }
-    setData(r.data);
-  }
-  useEffect(() => { load(); }, []);
-  const rows = data?.bookings || [];
-  const waiting = rows.filter(b => ['awaiting_review', 'pending', 'counter_pending'].includes(b.status));
-  const appStatus = data?.application?.status;
+/* ---------- Crew listings (booking requests live in Messages) ---------- */
+export function CrewDashboard({ onBack, toast }) {
   return (
-    <motion.section initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mx-auto w-[min(1200px,calc(100%-28px))] pb-16 pt-6">
+    <section className="mx-auto w-full max-w-[1180px] px-4 py-8 sm:px-6">
       <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-        <div><Tagline>Crew workspace</Tagline><h2 className="mt-2 font-display text-[28px] font-extrabold tracking-[-.05em] sm:text-[32px]">Booking requests</h2></div>
-        <div className="flex flex-wrap gap-2"><Button variant="ghost" onClick={onBack}><ArrowLeft className="size-4" aria-hidden="true" />Back to marketplace</Button></div>
+        <div><Tagline>Crew workspace</Tagline><h2 className="mt-2 font-display text-[28px] font-extrabold tracking-[-.05em] sm:text-[32px]">My listings</h2><p className="mt-1 text-xs text-muted">Booking requests arrive in your Messages.</p></div>
+        <Button variant="ghost" onClick={onBack}><ArrowLeft className="size-4" aria-hidden="true" />Back to marketplace</Button>
       </div>
-      {error ? <div className="rounded-2xl border border-line bg-white p-7 text-[13px] text-muted">{error} <Button size="sm" variant="ghost" onClick={load}>Try again</Button></div>
-        : data === null ? <div className="rounded-2xl border border-line bg-white p-7 text-[13px] text-muted">Loading your crew requests…</div>
-        : !data.hasProfile ? (<>
-          <div className="mb-5 rounded-2xl border border-line bg-white p-7 text-[13px] text-muted">
-            <strong className="block text-base text-ink">{appStatus === 'pending' ? 'Your application is under review' : appStatus === 'rejected' ? 'Your last application was not approved' : 'Create your first crew listing'}</strong>
-            <p className="mt-1.5">Your account is ready for crew listings. Add your role, category, rate and portfolio from the listing panel at the top of the main page. Once identity verification is complete, your listing will be published automatically.</p>
-          </div>
-        </>) : (<>
-          <div className="mb-5 grid grid-cols-2 gap-3.5 sm:grid-cols-3">
-            {[['Total requests', rows.length], ['Waiting for your reply', waiting.length]].map(([l, v], i) => (
-              <div key={l} className="rounded-2xl border border-line bg-white p-3.5 sm:p-5"><small className="text-[11px] text-muted">{l}</small><strong className="mt-2 block font-display text-[23px] font-extrabold tracking-[-.05em] sm:text-[27px]"><AnimatedNumber value={v} /></strong></div>
-            ))}
-          </div>
-          <div className="overflow-hidden rounded-2xl border border-line bg-white">
-            <div className="border-b border-line px-5 py-[18px] font-extrabold">Requests for your profile</div>
-            {!rows.length ? <div className="p-7 text-[13px] text-muted">No requests yet. Clients can now find and book your profile.</div> : rows.map((b, i) => {
-                            return (
-                <motion.div key={b.id} initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }} className="grid gap-2 border-b border-[#edf0f1] p-[15px] text-xs last:border-0 sm:grid-cols-[1.1fr_1.2fr_.8fr_1fr] sm:items-center sm:gap-3 sm:px-5 sm:py-4">
-                  <div><strong>{b.client_name}</strong><br /><span className="text-muted">{b.booking_unit === 'half' ? 'Half day' : 'Full day(s)'}</span></div>
-                  <div>{String(b.start_date).slice(0, 10)}{b.end_date !== b.start_date ? ' to ' + String(b.end_date).slice(0, 10) : ''}{b.booking_unit === 'half' ? ' · Half-day' : ''}<br /><span className="text-muted">{b.project_brief ? b.project_brief.slice(0, 90) : 'Open the chat for details'}</span></div>
-                  <div><span className="inline-flex items-center gap-1.5 rounded-full bg-[#fff1d7] px-2.5 py-1 text-[10px] font-extrabold capitalize text-[#8b5c09]"><span className="size-[5px] rounded-full bg-current" />{String(b.status).replaceAll('_', ' ')}</span><br /><span className="text-muted">Ref: {b.reference}</span></div>
-                  <div><strong>{naira(b.crew_net)}</strong> <span className="text-muted">your payout</span>
-                    <div className="mt-2"><Button size="sm" variant="ghost" onClick={() => onMessages?.(b.id)}>Open chat</Button></div>
-                  </div>
-                </motion.div>
-              );
-            })}
-          </div>
-          {chat && <Chat bookingId={chat.id} title={chat.title} mine="crew" onClose={() => setChat(null)} />}
-          <p className="my-2.5 text-[11px] text-muted">Client contact details stay private until a booking is confirmed through the platform.</p>
-        </>)}
-    </motion.section>
+      <CrewListing toast={toast} />
+    </section>
   );
 }
 

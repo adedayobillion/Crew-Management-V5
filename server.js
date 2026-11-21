@@ -1012,16 +1012,6 @@ app.post('/api/auth/switch-mode', requireUser, wrap(async (req, res) => {
 }));
 
 // Crew workspace: show requests for every professional profile owned by this account.
-app.get('/api/crew/bookings', requireUser, wrap(async (req, res) => {
-  const proIds = await crewProfessionalIds(pool, req.user);
-  const app_ = (await pool.query('SELECT id, status, professional_id FROM crew_applications WHERE user_id = $1 ORDER BY id DESC LIMIT 1', [req.user.id])).rows[0] || null;
-  if (!proIds.length) return res.json({ hasProfile: false, application: app_ ? { id: app_.id, status: app_.status } : null, bookings: [] });
-  const { rows } = await pool.query(
-    `SELECT id, reference, client_name, project_type, project_location, start_date, end_date, booking_unit, status, crew_response, crew_net, project_brief, overtime_terms, counter_details, payment_status
-       FROM bookings WHERE professional_id = ANY($1::int[]) ORDER BY created_at DESC LIMIT 200`, [proIds]); // client email/phone are deliberately not shared
-  res.json({ hasProfile: true, application: app_ ? { id: app_.id, status: app_.status } : null, bookings: rows.map(b => ({ ...b, reference: b.reference || refFor(b.id) })) });
-}));
-
 /* ---------------- admin guard ---------------- */
 const adminFailLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: 'draft-7', legacyHeaders: false, skipSuccessfulRequests: true, requestWasSuccessful: (req, res) => res.statusCode !== 401, message: { error: 'Too many failed attempts. Try again later.' } });
 /* ---- TOTP (RFC 6238: SHA-1, 30 s, 6 digits) ---- */
@@ -1436,31 +1426,6 @@ async function expireStaleRequests() {
 }
 
 /* ---------------- crew response ---------------- */
-app.post('/api/crew/bookings/:id/respond', requireUser, wrap(async (req, res) => {
-  const id = toInt(req.params.id); if (!id) fail(400, 'Invalid booking id.');
-  const response = req.body.response;
-  if (!['accepted', 'declined', 'countered'].includes(response)) fail(400, 'Invalid response action.');
-  const result = await withTx(async db => {
-    const b = (await db.query('SELECT * FROM bookings WHERE id = $1 FOR UPDATE', [id])).rows[0];
-    if (!b) fail(404, 'Booking not found.');
-    if (!(await ownsProfessionalBooking(db, req.user, b))) fail(403, 'This booking is not assigned to you.');
-    if (!['awaiting_review', 'pending'].includes(b.status)) fail(409, 'This booking can no longer be responded to.');
-    let newStatus = response === 'accepted' ? 'confirmed' : response === 'declined' ? 'declined' : 'counter_pending';
-    if (response === 'accepted') {
-      await db.query('SELECT id FROM professionals WHERE id = $1 FOR UPDATE', [b.professional_id]);
-      const clash = await db.query(`SELECT 1 FROM availability_blocks WHERE professional_id = $1 AND NOT (end_date < $2 OR start_date > $3) LIMIT 1`, [b.professional_id, b.start_date, b.end_date]);
-      if (clash.rows.length) fail(409, 'You already have a confirmed booking on these dates.');
-      await db.query(`INSERT INTO availability_blocks (professional_id, start_date, end_date, reason) VALUES ($1,$2,$3,'confirmed booking')`, [b.professional_id, b.start_date, b.end_date]);
-    }
-    await db.query('UPDATE bookings SET crew_response = $1, status = $2, counter_details = $3 WHERE id = $4', [response, newStatus, response === 'countered' ? str(req.body.counter_details, 1000) || null : null, id]);
-    return { status: newStatus, crew_response: response, _b: b };
-  });
-  const { _b, ...result_ } = result;
-  notifyBooking([Number(_b.user_id)], _b, response === 'accepted' ? 'Booking accepted' : response === 'declined' ? 'Booking declined' : 'Counter-offer received',
-    (_b.reference || refFor(_b.id)) + ' (' + fmtRange(_b) + ')' + (response === 'countered' ? ': open it to review the crew member\'s terms.' : '.'));
-  res.json({ success: true, ...result_ });
-}));
-
 /* ---------------- hirer response to a crew counter-offer ---------------- */
 app.post('/api/bookings/:id/counter-response', requireUser, wrap(async (req, res) => {
   const id = toInt(req.params.id); if (!id) fail(400, 'Invalid booking id.');
