@@ -158,7 +158,7 @@ export function Discover({ pros, loading, filters, setFilters, saved, onSave, on
   const chips = [['', 'All professionals'], ...CATEGORIES.map(c => [c, c])];
   return (
     <section id="discover" className="mx-auto w-[min(1200px,calc(100%-28px))] py-10 sm:py-14">
-      <SectionHead tag="Discover talent" title="Book professionals for your next production.">Browse available crew, compare rates and send a booking request.</SectionHead>
+      <SectionHead tag="Discover talent" title="Book professionals for your next production.">Browse available crew, compare day rates and send a booking request in a few taps. Keep all payments and chats in the app.</SectionHead>
       <div className="no-scrollbar -mx-0.5 mb-4 flex gap-2 overflow-x-auto px-0.5 pb-2 sm:flex-wrap">
         {chips.map(([v, l]) => (
           <motion.button key={v} whileTap={{ scale: 0.94 }} whileHover={{ y: -2 }} onClick={() => setFilters(f => ({ ...f, category: v }))} aria-pressed={filters.category === v}
@@ -182,11 +182,11 @@ export function Discover({ pros, loading, filters, setFilters, saved, onSave, on
 }
 
 /* ---------- How it works / Trust / Banner ---------- */
-const STEPS = [['01', 'Find a professional', 'Compare role, experience, portfolio notes, availability and indicative rates.'], ['02', 'Send a booking request', 'Share project dates, location, deliverables and any special requirements.'], ['03', 'Confirm & pay', 'After acceptance and final terms, the client pays through the platform checkout.'], ['04', 'Complete & review', 'Keep completion, issue reports and feedback linked to the booking record.']];
+const STEPS = [['01', 'Find a professional', 'Filter by role, location and rate, then check skills, showreel and availability.'], ['02', 'Send a booking request', 'Tell them the dates, location and what you need. Agree any changes in the chat.'], ['03', 'Confirm & pay', 'Once the offer is accepted, pay through secure checkout. Never pay outside the app.'], ['04', 'Complete & review', 'Confirm the job is done, leave a review, or report a problem on the same booking.']];
 export function How() {
   return (
     <section id="how" className="bg-white py-10 sm:py-14"><div className="mx-auto w-[min(1200px,calc(100%-28px))]">
-      <SectionHead tag="Simple booking flow" title="From discovery to confirmed booking.">Keep the project brief, agreed price, platform fee and booking status together.</SectionHead>
+      <SectionHead tag="Simple booking flow" title="From discovery to confirmed booking.">Your brief, agreed price, service fee and booking status live in one place.</SectionHead>
       <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
         {STEPS.map(([n, t, d], i) => (
           <Reveal key={n} delay={i * 0.08}>
@@ -214,10 +214,14 @@ export function Trust() {
   );
   return (
     <section id="trust" className="mx-auto w-[min(1200px,calc(100%-28px))] py-10 sm:py-14">
-      <SectionHead tag="Designed for accountable bookings" title="Keep the relationship on-platform.">Marketplace controls can reduce off-platform circumvention, but no website can eliminate it completely. Clear policies and good service matter too.</SectionHead>
+      <SectionHead tag="Book with confidence" title="Pay and talk inside the app.">Every booking, message and payment stays on one record, so both sides are covered if something goes wrong.</SectionHead>
       <div className="grid gap-4 md:grid-cols-2">
-        {card(false, <ShieldCheck className="size-6" strokeWidth={1.75} aria-hidden="true" />, 'Verified profiles & protected contact details', 'Review identity, references and credits. Keep direct contact details private before a booking is confirmed, with reporting and moderation for suspicious activity.', 0)}
-        {card(true, <ArrowLeftRight className="size-6" strokeWidth={1.75} aria-hidden="true" />, 'Clear terms, payments and records', 'Use platform booking terms, transparent fees, cancellation rules, completion confirmation and a dispute process. Do not promise escrow or chargeback protection until the payment setup supports it.', 1)}
+        {card(false, <ShieldCheck className="size-6" strokeWidth={1.75} aria-hidden="true" />, 'Verified crew and private contact details', 'Crew profiles are reviewed before they are listed. Phone numbers and emails stay hidden until a booking is confirmed, and you can report any suspicious account to our team.', 0)}
+        {card(true, <ArrowLeftRight className="size-6" strokeWidth={1.75} aria-hidden="true" />, 'Clear terms, payments and records', 'Agree the dates and price in the chat, pay through secure checkout, and confirm when the job is done. Fees, cancellation rules and the dispute process are spelled out before you pay.', 1)}
+      </div>
+          <div role="note" className="mt-4 flex items-start gap-3 rounded-2xl border border-[#f1d28a] bg-[#fff8e6] p-4 text-[13px] leading-relaxed text-[#6b4e07]">
+        <span aria-hidden className="text-xl">⚠️</span>
+        <p><strong className="font-extrabold">Beware of scams.</strong> Never pay, send a deposit or agree a booking outside the app, even if someone offers a discount or says they are in a hurry. Payments made off the platform are not protected and cannot be refunded or disputed. Never share your password or verification codes, and report anyone who asks you to move the conversation to WhatsApp, email or a bank transfer.</p>
       </div>
     </section>
   );
@@ -227,7 +231,7 @@ export function Banner({ onJoin }) {
     <section id="join" className="mx-auto w-[min(1200px,calc(100%-28px))] pb-14">
       <Reveal className="relative flex flex-col items-start justify-between gap-5 overflow-hidden rounded-[19px] bg-gradient-to-br from-lime via-[#b6e456] to-[#d6f78e] p-6 sm:flex-row sm:items-center sm:rounded-[22px] sm:p-[35px]">
         <div aria-hidden className="absolute inset-0 animate-aurora" style={{ background: 'radial-gradient(circle at 90% 10%,#fff6,transparent 45%)' }} />
-        <div className="relative"><h2 className="max-w-[650px] font-display text-[29px] font-extrabold leading-[1.05] tracking-[-.05em] sm:text-[clamp(27px,3vw,39px)]">Are you a production professional?</h2><p className="mt-2 text-[13px] text-[#536044]">Create a profile and get discovered for relevant paid opportunities.</p></div>
+        <div className="relative"><h2 className="max-w-[650px] font-display text-[29px] font-extrabold leading-[1.05] tracking-[-.05em] sm:text-[clamp(27px,3vw,39px)]">Are you a production professional?</h2><p className="mt-2 text-[13px] text-[#536044]">Create a free profile, set your day rate and get booking requests straight to your inbox.</p></div>
         <Button variant="dark" onClick={onJoin} className="relative">Apply to join the network <ArrowUpRight className="size-4" aria-hidden="true" /></Button>
       </Reveal>
     </section>
@@ -270,6 +274,7 @@ function Chat({ bookingId, title, mine: mineType, onClose }) {
           <div ref={end} />
         </div>
         {err && <div className="px-4 pt-2 text-[11px] text-red-600">{err}</div>}
+        <p className="border-t border-line bg-[#fff8e6] px-3 py-1.5 text-[11px] text-[#6b4e07]">Never pay or share bank details outside the app.</p>
         <form onSubmit={send} className="flex gap-2 p-3"><input className={cn(inputCls, 'flex-1')} value={text} onChange={e => setText(e.target.value)} maxLength={2000} placeholder="Type a message" aria-label="Message" /><Button type="submit">Send</Button></form>
       </div>
     </div>
@@ -347,7 +352,7 @@ export function Footer({ openLegal }) {
             {[['terms', 'Terms'], ['privacy', 'Privacy'], ['cancellation', 'Cancellation & refunds'], ['crew', 'Crew & payouts']].map(([k, l]) => <button key={k} type="button" onClick={() => openLegal(k)} className={lk}>{l}</button>)}
           </div>
         </div>
-        <p className="mt-4 text-[11px] text-[#aebbc8]">The right crew. The right opportunity.</p>
+        <p className="mt-4 text-[11px] text-[#aebbc8]">Pay and communicate only inside the app. Never send money or deal outside the platform.</p>
         <div className="mt-6 flex flex-col justify-between gap-2 border-t border-white/15 pt-4 text-[10px] text-[#aab6c2] sm:flex-row"><span>© {new Date().getFullYear()} Crew Management Agency</span><span>Built for production professionals · Nigeria</span></div>
       </div>
     </footer>

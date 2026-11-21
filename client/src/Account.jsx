@@ -529,7 +529,8 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                         <Button type="submit" disabled={busy || !propose.start}>{busy ? 'Sending…' : 'Send proposal'}</Button>
                       </form>
                     )}
-                    <form onSubmit={send} className="flex gap-2 border-t border-line p-3"><input className={inputCls + ' flex-1'} value={draft} onChange={e => setDraft(e.target.value)} maxLength={2000} placeholder="Write a message…" /><Button type="submit" disabled={busy || !draft.trim()}>{busy ? 'Sending…' : 'Send'}</Button></form>
+                    <p className="border-t border-line bg-[#fff8e6] px-3 py-1.5 text-[11px] text-[#6b4e07]">Beware of scams: never pay, send deposits or share bank details outside the app.</p>
+                    <form onSubmit={send} className="flex gap-2 p-3"><input className={inputCls + ' flex-1'} value={draft} onChange={e => setDraft(e.target.value)} maxLength={2000} placeholder="Write a message…" /><Button type="submit" disabled={busy || !draft.trim()}>{busy ? 'Sending…' : 'Send'}</Button></form>
                   </>
                 )}
               </section>
