@@ -339,6 +339,8 @@ async function initDb() {
       ALTER TABLE payments ADD COLUMN IF NOT EXISTS checkout_url TEXT;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR(10);
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS group_ref VARCHAR(20);
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS group_title TEXT;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS refund_status VARCHAR(20);
       ALTER TABLE professionals ALTER COLUMN rating DROP DEFAULT;
@@ -1303,6 +1305,26 @@ function pushChat(b, row, recipientId, user) {
 }
 const setOfferStatus = (db, messageId, status) => db.query(`UPDATE messages SET offer = jsonb_set(offer, '{status}', to_jsonb($2::text)) WHERE id = $1 RETURNING *`, [messageId, status]);
 
+// Creates one booking request (and its chat thread) for one professional. Shared by single and group requests.
+async function createBookingRequest(db, user, proId, body, note, group) {
+  const p = (await db.query(`SELECT id, name, role, rate FROM professionals WHERE id = $1 AND status = 'approved' AND is_active = TRUE FOR UPDATE`, [proId])).rows[0];
+  if (!p) fail(404, 'This crew member is not available.');
+  const o = parseProposal(body, p.rate); // the client cannot set the rate on a first request
+  if (body.dailyRate != null && Number(body.dailyRate) !== Number(p.rate)) o.daily_rate = Number(p.rate), Object.assign(o, priceFor(o.booking_unit, o.start_date, o.end_date, p.rate));
+  const clash = await db.query(`SELECT 1 FROM availability_blocks WHERE professional_id = $1 AND NOT (end_date < $2 OR start_date > $3) LIMIT 1`, [proId, o.start_date, o.end_date]);
+  if (clash.rows.length) fail(409, (group ? p.name + ' is' : 'This professional is') + ' not available for the requested dates.');
+  const ins = await db.query(
+    `INSERT INTO bookings (reference, professional_id, user_id, client_name, client_email, start_date, end_date, project_brief, project_type, project_location, overtime_terms, booking_unit, daily_rate, client_total, crew_net, status, crew_response, group_ref, group_title)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'General','','',$9,$10,$11,$12,'awaiting_review','pending',$13,$14) RETURNING *`,
+    ['TMP-' + crypto.randomBytes(8).toString('hex'), proId, user.id, user.name, user.email, o.start_date, o.end_date, note, o.booking_unit, o.daily_rate, o.client_total, o.crew_net, group ? group.ref : null, group ? group.title : null]);
+  const row = ins.rows[0]; const ref = refFor(row.id);
+  await db.query('UPDATE bookings SET reference = $1 WHERE id = $2', [ref, row.id]);
+  const booking = { ...row, reference: ref, professional_name: p.name, professional_role: p.role };
+  const crewIds = await crewUserIdsFor(db, proId);
+  const msg = await insertChatMessage(db, booking, user, 'request', note || 'Hi, I would like to book you for these dates.', { ...o, proposed_by: 'client', status: 'pending' }, crewIds[0]);
+  return { booking, msg, crewId: crewIds[0] };
+}
+
 app.post('/api/bookings', requireUser, requireApproved, requireVerifiedEmail, wrap(async (req, res) => {
   const b = req.body || {};
   const proId = toInt(b.professionalId);
@@ -1311,26 +1333,27 @@ app.post('/api/bookings', requireUser, requireApproved, requireVerifiedEmail, wr
   const note = str(b.message, 2000);
   const recent = await pool.query(`SELECT COUNT(*)::int AS n FROM bookings WHERE user_id = $1 AND created_at > NOW() - INTERVAL '24 hours'`, [req.user.id]);
   if (recent.rows[0].n >= 10) fail(429, 'You have reached the limit of 10 booking requests per 24 hours.');
-  const out = await withTx(async db => {
-    const p = (await db.query(`SELECT id, name, role, rate FROM professionals WHERE id = $1 AND status = 'approved' AND is_active = TRUE FOR UPDATE`, [proId])).rows[0];
-    if (!p) fail(404, 'This crew member is not available.');
-    const o = parseProposal(b, p.rate); // the client cannot set the rate on a first request
-    if (b.dailyRate != null && Number(b.dailyRate) !== Number(p.rate)) o.daily_rate = Number(p.rate), Object.assign(o, priceFor(o.booking_unit, o.start_date, o.end_date, p.rate));
-    const clash = await db.query(`SELECT 1 FROM availability_blocks WHERE professional_id = $1 AND NOT (end_date < $2 OR start_date > $3) LIMIT 1`, [proId, o.start_date, o.end_date]);
-    if (clash.rows.length) fail(409, 'This professional is not available for the requested dates.');
-    const ins = await db.query(
-      `INSERT INTO bookings (reference, professional_id, user_id, client_name, client_email, start_date, end_date, project_brief, project_type, project_location, overtime_terms, booking_unit, daily_rate, client_total, crew_net, status, crew_response)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'General','','',$9,$10,$11,$12,'awaiting_review','pending') RETURNING *`,
-      ['TMP-' + crypto.randomBytes(8).toString('hex'), proId, req.user.id, req.user.name, req.user.email, o.start_date, o.end_date, note, o.booking_unit, o.daily_rate, o.client_total, o.crew_net]);
-    const row = ins.rows[0]; const ref = refFor(row.id);
-    await db.query('UPDATE bookings SET reference = $1 WHERE id = $2', [ref, row.id]);
-    const booking = { ...row, reference: ref, professional_name: p.name, professional_role: p.role };
-    const crewIds = await crewUserIdsFor(db, proId);
-    const msg = await insertChatMessage(db, booking, req.user, 'request', note || 'Hi, I would like to book you for these dates.', { ...o, proposed_by: 'client', status: 'pending' }, crewIds[0]);
-    return { booking, msg, crewId: crewIds[0] };
-  });
+  const out = await withTx(db => createBookingRequest(db, req.user, proId, b, note, null));
   pushChat(out.booking, out.msg, out.crewId, req.user);
   res.status(201).json({ success: true, booking: out.booking });
+}));
+
+// Group booking: one request per crew member for the same dates, each with its own chat, price and payment.
+app.post('/api/group-bookings', requireUser, requireApproved, requireVerifiedEmail, wrap(async (req, res) => {
+  const b = req.body || {};
+  const ids = [...new Set((Array.isArray(b.professionalIds) ? b.professionalIds : []).map(toInt).filter(Boolean))];
+  if (ids.length < 2 || ids.length > 12) fail(400, 'Choose between 2 and 12 crew members for a group booking.');
+  const title = str(b.title, 120);
+  if (!title) fail(400, 'Give the project a title so the crew know what it is for.');
+  const note = str(b.message, 2000);
+  const own = await crewProfessionalIds(pool, req.user);
+  if (ids.some(i => own.includes(i))) fail(400, 'You cannot book your own crew profile.');
+  const recent = await pool.query(`SELECT COUNT(*)::int AS n FROM bookings WHERE user_id = $1 AND created_at > NOW() - INTERVAL '24 hours'`, [req.user.id]);
+  if (recent.rows[0].n + ids.length > 30) fail(429, 'You have reached the daily limit of booking requests. Try again tomorrow.');
+  const group = { ref: 'GRP-' + crypto.randomBytes(5).toString('hex').toUpperCase(), title };
+  const outs = await withTx(async db => { const r = []; for (const id of ids) r.push(await createBookingRequest(db, req.user, id, b, note, group)); return r; });
+  for (const o of outs) pushChat(o.booking, o.msg, o.crewId, req.user);
+  res.status(201).json({ success: true, group_ref: group.ref, bookings: outs.map(o => o.booking) });
 }));
 
 app.get('/api/my/bookings', requireUser, wrap(async (req, res) => {
@@ -1689,7 +1712,7 @@ app.get('/api/inbox',requireUser,wrap(async(req,res)=>{
   const crew="EXISTS (SELECT 1 FROM professionals px JOIN crew_applications ca ON (ca.professional_id=px.id OR px.application_id='app-' || ca.id::text) WHERE px.id=b.professional_id AND ca.user_id=$1)";
   const role="CASE WHEN "+client+" THEN 'client' ELSE 'crew' END";
   const {rows}=await pool.query(
-    "SELECT b.id,COALESCE(b.reference,'') AS reference,b.client_name,b.project_type,b.status,b.created_at,b.payment_status,b.start_date,b.end_date,b.booking_unit,b.daily_rate,b.client_total,b.crew_net,b.cancel_reason,b.cancelled_by,(SELECT COUNT(*)::int FROM reviews rv WHERE rv.booking_id=b.id) AS review_count,p.name AS professional_name,"+role+" AS my_role,"+
+    "SELECT b.id,COALESCE(b.reference,'') AS reference,b.client_name,b.project_type,b.status,b.created_at,b.payment_status,b.start_date,b.end_date,b.booking_unit,b.daily_rate,b.client_total,b.crew_net,b.cancel_reason,b.cancelled_by,b.group_title,(SELECT COUNT(*)::int FROM reviews rv WHERE rv.booking_id=b.id) AS review_count,p.name AS professional_name,"+role+" AS my_role,"+
     "(SELECT m.masked_content FROM messages m WHERE m.booking_id=b.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) AS last_message,"+
     "(SELECT MAX(m.created_at) FROM messages m WHERE m.booking_id=b.id) AS last_message_at,"+
     "(SELECT COUNT(*)::int FROM messages m WHERE m.booking_id=b.id AND ((m.sender_user_id IS NOT NULL AND m.sender_user_id<>$1) OR (m.sender_user_id IS NULL AND m.sender_type<>CASE WHEN "+client+" THEN 'client' ELSE 'crew' END)) "+
@@ -1817,26 +1840,6 @@ app.post('/api/bookings/:id/offers/:messageId/respond', requireUser, wrap(async 
   res.json({ success: true, booking: out.b });
 }));
 
-app.post('/api/team-bookings', requireUser, requireApproved, wrap(async (req, res) => {
-  const { project_title, start_date, end_date, members } = req.body || {};
-  const title = str(project_title, 150);
-  if (!title) fail(400, 'Please enter a project title.');
-  if (!isDate(start_date) || !isDate(end_date) || end_date < start_date) fail(400, 'Please choose valid dates.');
-  if (!Array.isArray(members) || !members.length || members.length > 20) fail(400, 'Add between 1 and 20 team members.');
-  const list = members.map(m => ({ professional_id: toInt(m && m.professional_id), role: str(m && m.role, 100) }));
-  if (list.some(m => !m.professional_id || !m.role)) fail(400, 'Each member needs a professional and a role.');
-  const ids = [...new Set(list.map(m => m.professional_id))];
-  const team = await withTx(async db => {
-    const ok = await db.query(`SELECT id FROM professionals WHERE id = ANY($1::int[]) AND status = 'approved' AND is_active = TRUE`, [ids]);
-    if (ok.rows.length !== ids.length) fail(400, 'One or more selected professionals are not available.');
-    const tb = (await db.query(
-      `INSERT INTO team_bookings (project_title, client_name, client_email, start_date, end_date, status) VALUES ($1,$2,$3,$4,$5,'pending') RETURNING *`,
-      [title, req.user.name, req.user.email, start_date, end_date])).rows[0];
-    for (const m of list) await db.query(`INSERT INTO team_booking_members (team_booking_id, professional_id, role, status) VALUES ($1,$2,$3,'pending')`, [tb.id, m.professional_id, m.role]);
-    return tb;
-  });
-  res.status(201).json({ success: true, team_booking: team });
-}));
 
 /* ---------------- crew applications ---------------- */
 app.post('/api/crew-applications', requireUser, requireVerifiedEmail, wrap(async (req, res) => {

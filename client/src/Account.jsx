@@ -477,7 +477,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                   <button key={thread.id} type="button" onClick={() => openThread(thread)} className={'block w-full border-b border-line p-4 text-left transition hover:bg-[#f7f9f2] ' + (selected?.id === thread.id ? 'bg-[#f1f5e9]' : '')}>
                     <div className="flex items-center justify-between gap-2"><strong className="text-sm">{thread.my_role === 'client' ? (thread.professional_name || 'Crew member') : (thread.client_name || 'Client')}</strong>{Number(thread.unread_count) > 0 && <span className="rounded-full bg-lime px-2 py-0.5 text-[10px] font-extrabold">{thread.unread_count}</span>}</div>
                     <p className="mt-1 line-clamp-2 text-xs text-muted">{thread.last_message || thread.project_type || 'Booking conversation'}</p>
-                    <span className="mt-1 block text-[10px] text-muted">{thread.reference}</span>
+                    <span className="mt-1 block text-[10px] text-muted">{thread.reference}{thread.group_title ? ' · Group: ' + thread.group_title : ''}</span>
                   </button>
                 ))}
               </aside>
@@ -485,7 +485,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                 {!selected ? <div className="grid flex-1 place-items-center p-6 text-sm text-muted">Choose a booking conversation.</div> : (
                   <>
                     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-line px-4 py-3">
-                      <div><strong className="text-sm">{current.my_role === 'client' ? current.professional_name : current.client_name}</strong><span className="ml-2 text-[11px] text-muted">{current.reference}</span></div>
+                      <div><strong className="text-sm">{current.my_role === 'client' ? current.professional_name : current.client_name}</strong><span className="ml-2 text-[11px] text-muted">{current.reference}{current.group_title ? ' · Group: ' + current.group_title : ''}</span></div>
                       <div className="flex flex-wrap items-center gap-2 text-xs">
                         <span className="text-muted">{day(current.start_date)}{day(current.end_date) !== day(current.start_date) ? ' to ' + day(current.end_date) : ''}{current.booking_unit === 'half' ? ' · half day' : ''}</span>
                         <strong>{naira(current.my_role === 'crew' ? current.crew_net : current.client_total)}</strong>
