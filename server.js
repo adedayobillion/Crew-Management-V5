@@ -341,6 +341,9 @@ async function initDb() {
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR(10);
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS group_ref VARCHAR(20);
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS quantity NUMERIC DEFAULT 1;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS schedule_kind VARCHAR(10) DEFAULT 'calendar';
+      ALTER TABLE professionals ADD COLUMN IF NOT EXISTS rate_unit VARCHAR(10) DEFAULT 'day';
       UPDATE messages SET masked_content = regexp_replace(masked_content, ' · client total ₦[0-9,]+$', ' · rate per day shown in the offer') WHERE kind = 'system' AND masked_content LIKE '% · client total ₦%';
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS group_title TEXT;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
@@ -1127,7 +1130,7 @@ async function myListing(db, user, rawId) {
   return row;
 }
 const isoDate = v => { const x = String(v || ''); if (!/^\d{4}-\d{2}-\d{2}$/.test(x)) return null; const d = new Date(x + 'T00:00:00Z'); return !isNaN(d) && d.toISOString().slice(0, 10) === x ? x : null; };
-const listingView = p => ({ id: p.id, role: p.role, category: p.category || '', location: p.location || '', bio: p.bio || '', skills: p.skills || [], showreel: p.showreel || '', rate: Number(p.rate) || 0, photo: p.photo || '', is_active: p.is_active !== false, status: p.status });
+const listingView = p => ({ id: p.id, role: p.role, category: p.category || '', location: p.location || '', bio: p.bio || '', skills: p.skills || [], showreel: p.showreel || '', rate: Number(p.rate) || 0, rate_unit: rateUnitOf(p.rate_unit), photo: p.photo || '', is_active: p.is_active !== false, status: p.status });
 app.get('/api/crew/listing', requireUser, wrap(async (req, res) => {
   const ids = await crewProfessionalIds(pool, req.user);
   const rows = ids.length ? (await pool.query('SELECT * FROM professionals WHERE id = ANY($1::int[]) ORDER BY id', [ids])).rows : [];
@@ -1144,9 +1147,10 @@ async function updateCrewListing(req, res, listingId) {
   if (b.bio !== undefined) { const v = str(b.bio, 1000) || null; add('bio', 'text', v); add('"desc"', 'text', v); add('description', 'text', v); }
   if (b.rate !== undefined) {
     const r = Math.round(Number(b.rate));
-    if (!Number.isFinite(r) || r < 1000 || r > 10000000) fail(400, 'Enter a daily rate between ₦1,000 and ₦10,000,000.');
+    if (!Number.isFinite(r) || r < 1000 || r > 10000000) fail(400, 'Enter a rate between ₦1,000 and ₦10,000,000.');
     add('rate', 'numeric', r); add('daily_rate', 'numeric', r); add('rate_full_day', 'numeric', r); // existing bookings keep the rate they were agreed at
   }
+  if (b.rateUnit !== undefined) { if (!RATE_UNITS.includes(b.rateUnit)) fail(400, 'Choose how you charge: per day, per hour or per project.'); add('rate_unit', 'text', b.rateUnit); }
   if (b.skills !== undefined) {
     const list = (Array.isArray(b.skills) ? b.skills : String(b.skills).split(',')).map(x => str(x, 40)).filter(Boolean);
     if (list.length > 15) fail(400, 'Add at most 15 skills.');
@@ -1172,11 +1176,11 @@ app.post('/api/crew/listings', requireUser, requireVerifiedEmail, wrap(async (re
   const b = req.body || {};
   const role = str(b.role, 80), category = CATEGORIES.find(c => c.toLowerCase() === str(b.category, 60).toLowerCase());
   const location = str(b.location || req.user.location, 120), bio = str(b.bio, 1000), showreel = str(b.showreel, 300);
-  const rate = Math.round(Number(b.rate));
+  const rate = Math.round(Number(b.rate)); const rateUnit = RATE_UNITS.includes(b.rateUnit) ? b.rateUnit : 'day';
   const skills = (Array.isArray(b.skills) ? b.skills : String(b.skills || '').split(',')).map(x => str(x, 40)).filter(Boolean);
   if (role.length < 2) fail(400, 'Enter a role for this listing.');
   if (!category) fail(400, 'Choose a valid category.');
-  if (!Number.isFinite(rate) || rate < 1000 || rate > 10000000) fail(400, 'Enter a daily rate between ₦1,000 and ₦10,000,000.');
+  if (!Number.isFinite(rate) || rate < 1000 || rate > 10000000) fail(400, 'Enter a rate between ₦1,000 and ₦10,000,000.');
   if (skills.length > 15) fail(400, 'Add at most 15 skills.');
   if (showreel) { let u; try { u = new URL(showreel); } catch (e) { fail(400, 'Enter a valid portfolio link starting with https://'); } if (u.protocol !== 'https:') fail(400, 'The portfolio link must use https://'); }
   const identity = (await pool.query('SELECT is_verified FROM users WHERE id = $1', [req.user.id])).rows[0];
@@ -1187,6 +1191,7 @@ app.post('/api/crew/listings', requireUser, requireVerifiedEmail, wrap(async (re
     const skillsValue = SKILLS_IS_JSON ? JSON.stringify([...new Set(skills)]) : [...new Set(skills)];
     const p = (await db.query(`INSERT INTO professionals (application_id,name,role,category,location,bio,\"desc\",description,showreel,rate,daily_rate,rate_full_day,rate_half_day,skills,verified,status,credits,active,is_active) VALUES ($1,$2,$3,$4,$5,$6::text,$7,$6::text,$8,$9::numeric,$9::numeric,$9::numeric,$10::numeric,$11::${skillsCast},$12,'approved','',TRUE,TRUE) RETURNING *`, ['app-' + appRow.id, req.user.name, role, category, location, bio, bio.slice(0,200), showreel || null, rate, Math.round(rate/2), skillsValue, true])).rows[0];
     await db.query('UPDATE crew_applications SET professional_id = $1 WHERE id = $2', [p.id, appRow.id]);
+    await db.query('UPDATE professionals SET rate_unit = $1::text WHERE id = $2', [rateUnit, p.id]); p.rate_unit = rateUnit;
     return p;
   });
   res.status(201).json({ success: true, listing: listingView(professional) });
@@ -1270,30 +1275,47 @@ app.get('/api/professionals/:id/reviews', wrap(async (req, res) => {
 /* ---------------- bookings (client) ---------------- */
 /* ---------------- chat-based booking: a request is the first message in the thread ---------------- */
 const SERVICE_FEE = 0.1;
-function priceFor(unit, start, end, dailyRate) {
-  const days = unit === 'half' ? 0.5 : daysBetween(start, end);
-  const base = Math.round(Number(dailyRate) * days);
+const RATE_UNITS = ['day', 'hour', 'project'];
+const rateUnitOf = v => (RATE_UNITS.includes(v) ? v : 'day');
+// quantity = days (full), 0.5 (half), hours, or 1 for a flat project fee. The server always recomputes totals.
+function priceFor(unit, start, end, rate, quantity) {
+  let qty;
+  if (unit === 'half') qty = 0.5; else if (unit === 'hour') qty = Number(quantity); else if (unit === 'project') qty = 1; else qty = daysBetween(start, end);
+  const base = Math.round(Number(rate) * qty);
   const fee = Math.round(base * SERVICE_FEE);
-  return { days, base, client_total: base + fee, crew_net: base - fee };
+  return { days: qty, quantity: qty, base, client_total: base + fee, crew_net: base - fee };
 }
-// Validates dates/unit and returns the normalised proposal (never trusts client-side totals).
-function parseProposal(body, defaultRate) {
-  const unit = body.bookingUnit === 'half' ? 'half' : 'full';
-  const start = body.startDate; const end = unit === 'half' ? body.startDate : body.endDate;
-  if (!isDate(start) || !isDate(end)) fail(400, 'Please choose valid start and end dates.');
-  if (start < todayLagos()) fail(400, 'The start date cannot be in the past.');
+// Validates the proposal for a listing priced per day, per hour or as a flat project fee; never trusts client totals.
+function parseProposal(body, defaultRate, rateUnit) {
+  const ru = rateUnitOf(rateUnit);
+  let unit, kind = 'calendar', qty = 1, start = body.startDate, end = body.endDate;
+  if (ru === 'hour') {
+    unit = 'hour'; end = start; qty = Number(body.quantity);
+    if (!(qty >= 1 && qty <= 240 && Number.isInteger(qty * 2))) fail(400, 'Enter the number of hours (1 to 240, in half hours).');
+  } else if (ru === 'project') {
+    unit = 'project'; kind = body.scheduleKind === 'delivery' ? 'delivery' : 'calendar';
+    if (kind === 'delivery') { start = body.deliveryDate || body.startDate; end = start; }
+  } else {
+    unit = body.bookingUnit === 'half' ? 'half' : 'full'; if (unit === 'half') end = start;
+  }
+  if (!isDate(start) || !isDate(end)) fail(400, kind === 'delivery' ? 'Please choose a valid delivery date.' : 'Please choose valid start and end dates.');
+  if (start < todayLagos()) fail(400, kind === 'delivery' ? 'The delivery date cannot be in the past.' : 'The start date cannot be in the past.');
   if (end < start) fail(400, 'The end date cannot be before the start date.');
-  if (unit === 'full' && daysBetween(start, end) > 90) fail(400, 'Bookings longer than 90 days must be arranged with support.');
+  if (kind === 'calendar' && unit !== 'half' && unit !== 'hour' && daysBetween(start, end) > 90) fail(400, 'Bookings longer than 90 days must be arranged with support.');
   let rate = Number(defaultRate);
   if (body.dailyRate != null && body.dailyRate !== '') {
     rate = Number(body.dailyRate);
-    if (!Number.isSafeInteger(rate) || rate < 1 || rate > 10000000) fail(400, 'Daily rate must be a whole number of naira.');
+    if (!Number.isSafeInteger(rate) || rate < 1 || rate > 10000000) fail(400, 'The rate must be a whole number of naira.');
   }
-  if (!(rate > 0)) fail(400, 'This crew member has no daily rate set.');
-  return { booking_unit: unit, start_date: start, end_date: end, daily_rate: rate, ...priceFor(unit, start, end, rate) };
+  if (!(rate > 0)) fail(400, 'This crew member has no rate set.');
+  return { booking_unit: unit, schedule_kind: kind, start_date: start, end_date: end, daily_rate: rate, ...priceFor(unit, start, end, rate, qty) };
 }
 function offerSummary(o) {
-  return fmtRange(o) + (o.booking_unit === 'half' ? ' · half day' : ' · ' + o.days + ' day' + (o.days === 1 ? '' : 's')) + ' · ₦' + Number(o.daily_rate).toLocaleString('en-NG') + (o.booking_unit === 'half' ? ' half-day rate' : ' per day');
+  const rate = '₦' + Number(o.daily_rate).toLocaleString('en-NG');
+  const when = o.schedule_kind === 'delivery' ? 'Delivery by ' + fmtRange({ start_date: o.start_date, end_date: o.start_date }) : fmtRange(o);
+  if (o.booking_unit === 'project') return when + ' · flat project fee ' + rate;
+  if (o.booking_unit === 'hour') return when + ' · ' + o.quantity + ' hour' + (Number(o.quantity) === 1 ? '' : 's') + ' · ' + rate + ' per hour';
+  return when + (o.booking_unit === 'half' ? ' · half day · ' + rate + ' half-day rate' : ' · ' + o.days + ' day' + (o.days === 1 ? '' : 's') + ' · ' + rate + ' per day');
 }
 async function insertChatMessage(db, b, user, kind, text, offer, recipientId) {
   const senderType = ownsBooking(user, b) ? 'client' : 'crew';
@@ -1319,23 +1341,23 @@ const setOfferStatus = (db, messageId, status) => db.query(`UPDATE messages SET 
 
 // Creates one booking request (and its chat thread) for one professional. Shared by single and group requests.
 async function createBookingRequest(db, user, proId, body, note, group) {
-  const p = (await db.query(`SELECT id, name, role, rate FROM professionals WHERE id = $1 AND status = 'approved' AND is_active = TRUE FOR UPDATE`, [proId])).rows[0];
+  const p = (await db.query(`SELECT id, name, role, rate, rate_unit FROM professionals WHERE id = $1 AND status = 'approved' AND is_active = TRUE FOR UPDATE`, [proId])).rows[0];
   if (!p) fail(404, 'This crew member is not available.');
-  const o = parseProposal(body, p.rate); // the client cannot set the rate on a first request
-  if (body.dailyRate != null && Number(body.dailyRate) !== Number(p.rate)) o.daily_rate = Number(p.rate), Object.assign(o, priceFor(o.booking_unit, o.start_date, o.end_date, p.rate));
-  const clash = await db.query(`SELECT 1 FROM availability_blocks WHERE professional_id = $1 AND NOT (end_date < $2 OR start_date > $3) LIMIT 1`, [proId, o.start_date, o.end_date]);
+  if (group && rateUnitOf(p.rate_unit) !== 'day') fail(400, p.name + ' is priced per ' + (p.rate_unit === 'hour' ? 'hour' : 'project') + '. Book them on their own instead of in a group.');
+  const o = parseProposal({ ...body, dailyRate: undefined }, p.rate, p.rate_unit); // the client cannot set the rate on a first request
+  const clash = o.schedule_kind === 'delivery' ? { rows: [] } : await db.query(`SELECT 1 FROM availability_blocks WHERE professional_id = $1 AND NOT (end_date < $2 OR start_date > $3) LIMIT 1`, [proId, o.start_date, o.end_date]);
   if (clash.rows.length) fail(409, (group ? p.name + ' is' : 'This professional is') + ' not available for the requested dates.');
   // One person, one booking per client for the same dates, even if they list several roles.
   const crewIds = await crewUserIdsFor(db, proId);
-  const dup = await db.query(
-    `SELECT 1 FROM bookings b WHERE b.user_id = $1::int AND b.status NOT IN ('cancelled','declined','expired','refunded') AND NOT (b.end_date < $3::date OR b.start_date > $4::date)
+  const dup = o.schedule_kind === 'delivery' ? { rows: [] } : await db.query(
+    `SELECT 1 FROM bookings b WHERE b.user_id = $1::int AND COALESCE(b.schedule_kind,'calendar') = 'calendar' AND b.status NOT IN ('cancelled','declined','expired','refunded') AND NOT (b.end_date < $3::date OR b.start_date > $4::date)
        AND (b.professional_id = $2::int OR b.professional_id IN (SELECT p.id FROM professionals p JOIN crew_applications ca ON (ca.professional_id = p.id OR p.application_id = 'app-' || ca.id::text) WHERE ca.user_id = ANY($5::int[]))) LIMIT 1`,
     [user.id, proId, o.start_date, o.end_date, crewIds]);
   if (dup.rows.length) fail(409, 'You already have a booking with ' + p.name + ' that overlaps these dates. Open it in Messages to change the details instead of booking them again.');
   const ins = await db.query(
-    `INSERT INTO bookings (reference, professional_id, user_id, client_name, client_email, start_date, end_date, project_brief, project_type, project_location, overtime_terms, booking_unit, daily_rate, client_total, crew_net, status, crew_response, group_ref, group_title)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'General','','',$9,$10,$11,$12,'awaiting_review','pending',$13,$14) RETURNING *`,
-    ['TMP-' + crypto.randomBytes(8).toString('hex'), proId, user.id, user.name, user.email, o.start_date, o.end_date, note, o.booking_unit, o.daily_rate, o.client_total, o.crew_net, group ? group.ref : null, group ? group.title : null]);
+    `INSERT INTO bookings (reference, professional_id, user_id, client_name, client_email, start_date, end_date, project_brief, project_type, project_location, overtime_terms, booking_unit, daily_rate, client_total, crew_net, status, crew_response, group_ref, group_title, quantity, schedule_kind)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'General','','',$9,$10,$11,$12,'awaiting_review','pending',$13,$14,$15,$16) RETURNING *`,
+    ['TMP-' + crypto.randomBytes(8).toString('hex'), proId, user.id, user.name, user.email, o.start_date, o.end_date, note, o.booking_unit, o.daily_rate, o.client_total, o.crew_net, group ? group.ref : null, group ? group.title : null, o.quantity, o.schedule_kind]);
   const row = ins.rows[0]; const ref = refFor(row.id);
   await db.query('UPDATE bookings SET reference = $1 WHERE id = $2', [ref, row.id]);
   const booking = { ...row, reference: ref, professional_name: p.name, professional_role: p.role };
@@ -1435,7 +1457,7 @@ app.post('/api/bookings/:id/complete', requireUser, wrap(async (req, res) => {
     if (!ownsBooking(req.user, b)) fail(403, 'Only the client can confirm completion.');
     if (!['confirmed', 'in_progress', 'completion_review'].includes(b.status)) fail(409, 'This booking is not in progress.');
     if (b.payment_status !== 'paid') fail(409, 'Payment must be completed before the job can be marked complete.');
-    if (String(b.start_date).slice(0, 10) > todayLagos()) fail(409, 'You can confirm completion once the job has started.');
+    if ((b.schedule_kind || 'calendar') === 'calendar' && String(b.start_date).slice(0, 10) > todayLagos()) fail(409, 'You can confirm completion once the job has started.');
     const upd = await db.query(`UPDATE bookings SET status = 'completed', completed_at = NOW() WHERE id = $1 RETURNING *`, [b.id]);
     const other = (await crewUserIdsFor(db, b.professional_id))[0];
     const sys = await insertChatMessage(db, b, req.user, 'system', 'The client confirmed the job is complete.', null, other);
@@ -1773,7 +1795,7 @@ app.get('/api/inbox',requireUser,wrap(async(req,res)=>{
   const crew="EXISTS (SELECT 1 FROM professionals px JOIN crew_applications ca ON (ca.professional_id=px.id OR px.application_id='app-' || ca.id::text) WHERE px.id=b.professional_id AND ca.user_id=$1)";
   const role="CASE WHEN "+client+" THEN 'client' ELSE 'crew' END";
   const {rows}=await pool.query(
-    "SELECT b.id,COALESCE(b.reference,'') AS reference,b.client_name,b.project_type,b.status,b.created_at,b.payment_status,b.start_date,b.end_date,b.booking_unit,b.daily_rate,b.client_total,b.crew_net,b.cancel_reason,b.cancelled_by,b.group_title,b.group_ref,(SELECT COUNT(*)::int FROM reviews rv WHERE rv.booking_id=b.id) AS review_count,p.name AS professional_name,"+role+" AS my_role,"+
+    "SELECT b.id,COALESCE(b.reference,'') AS reference,b.client_name,b.project_type,b.status,b.created_at,b.payment_status,b.start_date,b.end_date,b.booking_unit,b.daily_rate,b.client_total,b.crew_net,b.cancel_reason,b.cancelled_by,b.group_title,b.group_ref,b.quantity,b.schedule_kind,(SELECT rate_unit FROM professionals WHERE id=b.professional_id) AS rate_unit,(SELECT COUNT(*)::int FROM reviews rv WHERE rv.booking_id=b.id) AS review_count,p.name AS professional_name,"+role+" AS my_role,"+
     "(SELECT m.masked_content FROM messages m WHERE m.booking_id=b.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) AS last_message,"+
     "(SELECT MAX(m.created_at) FROM messages m WHERE m.booking_id=b.id) AS last_message_at,"+
     "(SELECT COUNT(*)::int FROM messages m WHERE m.booking_id=b.id AND ((m.sender_user_id IS NOT NULL AND m.sender_user_id<>$1) OR (m.sender_user_id IS NULL AND m.sender_type<>CASE WHEN "+client+" THEN 'client' ELSE 'crew' END)) "+
@@ -1835,14 +1857,14 @@ app.post('/api/bookings/:id/offers', requireUser, wrap(async (req, res) => {
     if (!(await canAccessBooking(db, req.user, b))) fail(403, 'You do not have access to this booking.');
     if (!OPEN_FOR_OFFERS.includes(b.status)) fail(409, 'This booking is closed, so changes can no longer be proposed.');
     if (b.payment_status === 'paid') fail(409, 'This booking is already paid. Contact support to change it.');
-    const pro = (await db.query('SELECT rate FROM professionals WHERE id = $1', [b.professional_id])).rows[0];
+    const pro = (await db.query('SELECT rate, rate_unit FROM professionals WHERE id = $1', [b.professional_id])).rows[0];
     const mine = ownsBooking(req.user, b) ? 'client' : 'crew';
-    const o = parseProposal(req.body || {}, b.daily_rate || (pro && pro.rate));
+    const o = parseProposal(req.body || {}, b.daily_rate || (pro && pro.rate), pro && pro.rate_unit);
     if (mine === 'client' && req.body.dailyRate != null && Number(req.body.dailyRate) !== Number(b.daily_rate || pro.rate)) fail(403, 'Only the crew member can change the daily rate.');
     const holds = BLOCKING_STATUSES.includes(b.status);
-    const clash = await db.query(
+    const clash = o.schedule_kind === 'delivery' ? { rows: [] } : await db.query(
       `SELECT 1 FROM availability_blocks WHERE professional_id = $1 AND NOT (end_date < $2 OR start_date > $3)
-         AND NOT ($4::boolean AND start_date = $5 AND end_date = $6) LIMIT 1`, [b.professional_id, o.start_date, o.end_date, holds, b.start_date, b.end_date]);
+         AND NOT ($4::boolean AND start_date = $5 AND end_date = $6 AND $7::text = 'calendar') LIMIT 1`, [b.professional_id, o.start_date, o.end_date, holds, b.start_date, b.end_date, b.schedule_kind || 'calendar']);
     if (clash.rows.length) fail(409, 'The professional is not available for those dates.');
     await db.query(`UPDATE messages SET offer = jsonb_set(offer, '{status}', '"superseded"') WHERE booking_id = $1 AND kind IN ('request','offer') AND offer->>'status' = 'pending'`, [b.id]);
     const other = mine === 'client' ? (await crewUserIdsFor(db, b.professional_id))[0] : Number(b.user_id);
@@ -1872,20 +1894,17 @@ app.post('/api/bookings/:id/offers/:messageId/respond', requireUser, wrap(async 
     let text; let nextStatus = b.status;
     if (response === 'accepted') {
       await db.query('SELECT id FROM professionals WHERE id = $1 FOR UPDATE', [b.professional_id]);
-      const clash = await db.query(
+      const delivery = o.schedule_kind === 'delivery', wasCalendar = (b.schedule_kind || 'calendar') === 'calendar';
+      const clash = delivery ? { rows: [] } : await db.query(
         `SELECT 1 FROM availability_blocks WHERE professional_id = $1 AND NOT (end_date < $2 OR start_date > $3)
-           AND NOT ($4::boolean AND start_date = $5 AND end_date = $6) LIMIT 1`, [b.professional_id, o.start_date, o.end_date, holds, b.start_date, b.end_date]);
+           AND NOT ($4::boolean AND $7::boolean AND start_date = $5 AND end_date = $6) LIMIT 1`, [b.professional_id, o.start_date, o.end_date, holds, b.start_date, b.end_date, wasCalendar]);
       if (clash.rows.length) fail(409, 'The professional is no longer available on those dates.');
-      const price = priceFor(o.booking_unit, o.start_date, o.end_date, o.daily_rate); // recomputed on the server
-      if (holds) {
-        await db.query(`UPDATE availability_blocks SET start_date = $1, end_date = $2 WHERE id = (SELECT id FROM availability_blocks WHERE professional_id = $3 AND start_date = $4 AND end_date = $5 AND reason = 'confirmed booking' LIMIT 1)`,
-          [o.start_date, o.end_date, b.professional_id, b.start_date, b.end_date]);
-      } else {
-        await db.query(`INSERT INTO availability_blocks (professional_id, start_date, end_date, reason) VALUES ($1,$2,$3,'confirmed booking')`, [b.professional_id, o.start_date, o.end_date]);
-        nextStatus = 'confirmed';
-      }
-      await db.query(`UPDATE bookings SET start_date=$1, end_date=$2, booking_unit=$3, daily_rate=$4, client_total=$5, crew_net=$6, status=$7, crew_response='accepted' WHERE id=$8`,
-        [o.start_date, o.end_date, o.booking_unit, o.daily_rate, price.client_total, price.crew_net, nextStatus, b.id]);
+      const price = priceFor(o.booking_unit, o.start_date, o.end_date, o.daily_rate, o.quantity); // recomputed on the server
+      if (holds && wasCalendar) await db.query(`DELETE FROM availability_blocks WHERE id = (SELECT id FROM availability_blocks WHERE professional_id = $1 AND start_date = $2 AND end_date = $3 AND reason = 'confirmed booking' LIMIT 1)`, [b.professional_id, b.start_date, b.end_date]);
+      if (!delivery) await db.query(`INSERT INTO availability_blocks (professional_id, start_date, end_date, reason) VALUES ($1,$2,$3,'confirmed booking')`, [b.professional_id, o.start_date, o.end_date]);
+      if (!holds) nextStatus = 'confirmed';
+      await db.query(`UPDATE bookings SET start_date=$1, end_date=$2, booking_unit=$3, daily_rate=$4, client_total=$5, crew_net=$6, status=$7, crew_response='accepted', quantity=$9, schedule_kind=$10 WHERE id=$8`,
+        [o.start_date, o.end_date, o.booking_unit, o.daily_rate, price.client_total, price.crew_net, nextStatus, b.id, price.quantity, o.schedule_kind || 'calendar']);
       text = (holds ? 'Change accepted: ' : 'Booking confirmed: ') + offerSummary({ ...o, ...price });
     } else {
       if (m.kind === 'request' && mine === 'crew') { nextStatus = 'declined'; text = 'Request declined.'; }
@@ -1918,7 +1937,7 @@ app.post('/api/crew-applications', requireUser, requireVerifiedEmail, wrap(async
   if (!role) fail(400, 'Please choose your primary role.');
   if (!location) fail(400, 'Please enter your location.');
   if (!category) fail(400, 'Choose a valid crew category.');
-  if (!Number.isFinite(dailyRate) || dailyRate < 1000 || dailyRate > 10000000) fail(400, 'Enter a daily rate between ₦1,000 and ₦10,000,000.');
+  if (!Number.isFinite(dailyRate) || dailyRate < 1000 || dailyRate > 10000000) fail(400, 'Enter a rate between ₦1,000 and ₦10,000,000.');
   if (portfolio) {
     if (!/^https?:\/\//i.test(portfolio)) portfolio = 'https://' + portfolio;
     try { const u = new URL(portfolio); if (u.protocol !== 'https:') throw 0; portfolio = u.toString(); } catch (e) { fail(400, 'Portfolio must be a valid HTTPS link.'); }

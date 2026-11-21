@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Button, Field, Tagline, inputCls } from './ui.jsx';
-import { http, naira, postJSON } from './lib.js';
+import { http, naira, postJSON, proposalBody } from './lib.js';
 import { ProposalFields } from './modals.jsx';
 import { ArrowLeft, CalendarClock, Check, CreditCard, FileText, Star, X } from 'lucide-react';
 
@@ -279,11 +279,11 @@ function OfferCard({ message, thread, busy, onRespond }) {
       </div>
       {message.masked_content && <p className="mt-2 whitespace-pre-wrap break-words text-[13px]">{message.masked_content}</p>}
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 rounded-xl bg-[#f5f7f3] p-3 text-xs">
-        <dt className="text-muted">Dates</dt><dd className="text-right font-bold">{day(o.start_date)}{o.end_date !== o.start_date ? ' to ' + day(o.end_date) : ''}</dd>
-        <dt className="text-muted">Length</dt><dd className="text-right font-bold">{o.booking_unit === 'half' ? 'Half day' : o.days + (o.days === 1 ? ' day' : ' days')}</dd>
-        <dt className="text-muted">Daily rate</dt><dd className="text-right font-bold">{naira(o.daily_rate)}</dd>
+        <dt className="text-muted">{o.schedule_kind === 'delivery' ? 'Deliver by' : 'Dates'}</dt><dd className="text-right font-bold">{day(o.start_date)}{o.schedule_kind !== 'delivery' && o.end_date !== o.start_date ? ' to ' + day(o.end_date) : ''}</dd>
+        {o.booking_unit === 'project' ? null : <><dt className="text-muted">{o.booking_unit === 'hour' ? 'Hours' : 'Length'}</dt><dd className="text-right font-bold">{o.booking_unit === 'half' ? 'Half day' : o.booking_unit === 'hour' ? o.quantity + (Number(o.quantity) === 1 ? ' hour' : ' hours') : o.days + (o.days === 1 ? ' day' : ' days')}</dd></>}
+        <dt className="text-muted">{o.booking_unit === 'project' ? 'Project fee' : o.booking_unit === 'hour' ? 'Hourly rate' : 'Daily rate'}</dt><dd className="text-right font-bold">{naira(o.daily_rate)}</dd>
         {(() => {
-          const base = Math.round(Number(o.daily_rate || 0) * Number(o.days || 1));
+          const base = Number(o.base != null ? o.base : Math.round(Number(o.daily_rate || 0) * Number(o.days || 1)));
           return mineRole === 'crew' ? (<>
             <dt className="text-muted">Booking value</dt><dd className="text-right font-bold">{naira(base)}</dd>
             <dt className="text-muted">Platform commission (10%)</dt><dd className="text-right font-bold">−{naira(base - Number(o.crew_net || 0))}</dd>
@@ -399,13 +399,13 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
   function openPropose() {
     if (!current) return;
     setNote('');
-    setPropose({ unit: current.booking_unit === 'half' ? 'half' : 'full', start: day(current.start_date), end: day(current.end_date), rate: String(Number(current.daily_rate || 0) || '') });
+    setPropose({ unit: current.booking_unit === 'half' ? 'half' : 'full', start: day(current.start_date), end: day(current.end_date), rate: String(Number(current.daily_rate || 0) || ''), qty: String(Number(current.quantity || '') || ''), kind: current.schedule_kind === 'delivery' ? 'delivery' : 'calendar' });
   }
   async function sendProposal(e) {
     e.preventDefault();
     if (!current || !propose || busy) return;
     setBusy(true); setError('');
-    const body = { bookingUnit: propose.unit, startDate: propose.start, endDate: propose.unit === 'half' ? propose.start : propose.end, note };
+    const body = { ...proposalBody(propose, current.rate_unit || 'day'), note };
     if (current.my_role === 'crew' && propose.rate) body.dailyRate = Number(propose.rate);
     const r = await postJSON('/api/bookings/' + current.id + '/offers', body).catch(() => ({ ok: false, data: {} }));
     setBusy(false);
@@ -514,7 +514,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-line px-4 py-3">
                       <div><strong className="text-sm">{current.my_role === 'client' ? current.professional_name : current.client_name}</strong><span className="ml-2 text-[11px] text-muted">{current.reference}{current.group_title ? ' · Group: ' + current.group_title : ''}</span></div>
                       <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <span className="text-muted">{day(current.start_date)}{day(current.end_date) !== day(current.start_date) ? ' to ' + day(current.end_date) : ''}{current.booking_unit === 'half' ? ' · half day' : ''}</span>
+                        <span className="text-muted">{current.schedule_kind === 'delivery' ? 'Deliver by ' : ''}{day(current.start_date)}{current.schedule_kind !== 'delivery' && day(current.end_date) !== day(current.start_date) ? ' to ' + day(current.end_date) : ''}{current.booking_unit === 'half' ? ' · half day' : current.booking_unit === 'hour' ? ' · ' + Number(current.quantity) + ' hr' : current.booking_unit === 'project' ? ' · flat fee' : ''}</span>
                         <strong>{naira(current.my_role === 'crew' ? current.crew_net : current.client_total)}</strong>
                         <span className="rounded-full bg-[#eef1f4] px-2 py-0.5 text-[10px] font-extrabold capitalize text-[#445468]">{String(current.status).replaceAll('_', ' ')}</span>
                         {OPEN_STATES.includes(current.status) && current.payment_status !== 'paid' && <Button size="sm" variant="ghost" onClick={openPropose}><CalendarClock className="size-4" aria-hidden="true" />Change dates or price</Button>}
@@ -551,7 +551,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                     {propose && (
                       <form onSubmit={sendProposal} className="grid gap-3 border-t border-line bg-white p-3.5">
                         <div className="flex items-center justify-between"><strong className="text-sm">Propose a change</strong><button type="button" className="text-xs text-muted underline" onClick={() => setPropose(null)}>Cancel</button></div>
-                        <ProposalFields value={propose} onChange={setPropose} canEditRate={current.my_role === 'crew'} viewer={current.my_role} baseRate={Number(current.daily_rate || 0)} />
+                        <ProposalFields value={propose} onChange={setPropose} canEditRate={current.my_role === 'crew'} viewer={current.my_role} rateUnit={current.rate_unit || 'day'} baseRate={Number(current.daily_rate || 0)} />
                         <input className={inputCls} value={note} maxLength={1000} onChange={e => setNote(e.target.value)} placeholder="Add a note (optional)" />
                         <Button type="submit" disabled={busy || !propose.start}>{busy ? 'Sending…' : 'Send proposal'}</Button>
                       </form>

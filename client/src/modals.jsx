@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Button, Field, Modal, ModalHead, SlidingTabs, Tagline, inputCls, useToast } from './ui.jsx';
-import { naira, postJSON, quote, todayLagos } from './lib.js';
+import { naira, postJSON, proposalBody, quote, todayLagos } from './lib.js';
 import { legalPolicies } from './legal.js';
 import { ArrowUpRight } from 'lucide-react';
 
@@ -93,37 +93,43 @@ export function ResetModal({ token, onClose, onDone }) {
 }
 
 /* ================= Booking: dates + a message; everything else is agreed in the chat ================= */
-export function ProposalFields({ value, onChange, canEditRate, baseRate, hideQuote, viewer = 'client' }) {
-  const set = patch => onChange(v => { const n = { ...v, ...patch }; if (n.unit === 'half') n.end = n.start; else if (n.end && n.start && n.end < n.start) n.end = n.start; return n; });
-  const q = quote(value.unit, value.start, value.end, value.rate || baseRate);
+export function ProposalFields({ value, onChange, canEditRate, baseRate, hideQuote, viewer = 'client', rateUnit = 'day' }) {
+  const set = patch => onChange(v => { const n = { ...v, ...patch }; if (rateUnit === 'hour' || n.unit === 'half' || (rateUnit === 'project' && n.kind === 'delivery')) n.end = n.start; else if (n.end && n.start && n.end < n.start) n.end = n.start; return n; });
+  const unit = rateUnit === 'day' ? value.unit : rateUnit;
+  const q = quote(unit, value.start, value.end, value.rate || baseRate, value.qty);
+  const toggle = (items, cur, key) => (
+    <div role="group" className="inline-flex w-fit rounded-full border border-line bg-white p-0.5 text-xs font-bold">
+      {items.map(([k, l]) => <button key={k} type="button" aria-pressed={cur === k} onClick={() => set({ [key]: k })} className={'rounded-full px-3.5 py-1.5 transition ' + (cur === k ? 'bg-ink text-white' : 'text-[#566274]')}>{l}</button>)}
+    </div>
+  );
+  const rateLabel = { day: 'Daily rate (₦)', hour: 'Hourly rate (₦)', project: 'Project fee (₦)' }[rateUnit];
+  const delivery = rateUnit === 'project' && value.kind === 'delivery';
   return (
     <div className="grid gap-3">
-      <div role="group" aria-label="Booking length" className="inline-flex w-fit rounded-full border border-line bg-white p-0.5 text-xs font-bold">
-        {[['full', 'Full day(s)'], ['half', 'Half day']].map(([k, l]) => (
-          <button key={k} type="button" aria-pressed={value.unit === k} onClick={() => set({ unit: k })} className={'rounded-full px-3.5 py-1.5 transition ' + (value.unit === k ? 'bg-ink text-white' : 'text-[#566274]')}>{l}</button>
-        ))}
-      </div>
+      {rateUnit === 'day' && toggle([['full', 'Full day(s)'], ['half', 'Half day']], value.unit, 'unit')}
+      {rateUnit === 'project' && toggle([['calendar', 'Set dates'], ['delivery', 'Delivery date']], value.kind || 'calendar', 'kind')}
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label={value.unit === 'half' ? 'Date' : 'Start date'} htmlFor="pf-start"><input id="pf-start" type="date" required min={todayLagos()} className={inputCls} value={value.start} onChange={e => set({ start: e.target.value })} /></Field>
-        {value.unit === 'full' && <Field label="End date" htmlFor="pf-end"><input id="pf-end" type="date" required min={value.start || todayLagos()} className={inputCls} value={value.end} onChange={e => set({ end: e.target.value })} /></Field>}
+        <Field label={delivery ? 'Deliver by' : rateUnit === 'hour' || value.unit === 'half' ? 'Date' : 'Start date'} htmlFor="pf-start"><input id="pf-start" type="date" required min={todayLagos()} className={inputCls} value={value.start} onChange={e => set({ start: e.target.value })} /></Field>
+        {rateUnit === 'hour' && <Field label="Number of hours" htmlFor="pf-qty"><input id="pf-qty" type="number" required min="1" max="240" step="0.5" inputMode="decimal" className={inputCls} value={value.qty || ''} onChange={e => set({ qty: e.target.value })} /></Field>}
+        {((rateUnit === 'day' && value.unit === 'full') || (rateUnit === 'project' && !delivery)) && <Field label="End date" htmlFor="pf-end"><input id="pf-end" type="date" required min={value.start || todayLagos()} className={inputCls} value={value.end} onChange={e => set({ end: e.target.value })} /></Field>}
       </div>
-      {canEditRate && <Field label="Daily rate (₦)" htmlFor="pf-rate"><input id="pf-rate" type="number" min="1" step="1" inputMode="numeric" className={inputCls} value={value.rate} onChange={e => set({ rate: e.target.value })} /></Field>}
+      {canEditRate && <Field label={rateLabel} htmlFor="pf-rate"><input id="pf-rate" type="number" min="1" step="1" inputMode="numeric" className={inputCls} value={value.rate} onChange={e => set({ rate: e.target.value })} /></Field>}
       {!hideQuote && <p className="rounded-xl bg-[#f5f7f3] px-3.5 py-2.5 text-xs text-[#445468]" aria-live="polite">
-        {naira(value.rate || baseRate)}/day × {q.days} {q.days === 1 ? 'day' : q.days === 0.5 ? 'day' : 'days'} {viewer === 'crew' ? <> − 10% commission = <strong className="text-ink">{naira(q.crewNet)}</strong> to you</> : <> + 10% service fee = <strong className="text-ink">{naira(q.clientTotal)}</strong> total</>}
+        {rateUnit === 'project' ? <>{naira(value.rate || baseRate)} flat fee</> : rateUnit === 'hour' ? <>{naira(value.rate || baseRate)}/hr × {q.days} hr{q.days === 1 ? '' : 's'}</> : <>{naira(value.rate || baseRate)}/day × {q.days} {q.days === 1 || q.days === 0.5 ? 'day' : 'days'}</>} {viewer === 'crew' ? <> − 10% commission = <strong className="text-ink">{naira(q.crewNet)}</strong> to you</> : <> + 10% service fee = <strong className="text-ink">{naira(q.clientTotal)}</strong> total</>}
       </p>}
     </div>
   );
 }
 
 export function BookingModal({ pro, user, onClose, onSent, onNeedAuth }) {
-  const open = !!pro; const blank = { unit: 'full', start: '', end: '', rate: '' };
+  const open = !!pro; const blank = { unit: 'full', start: '', end: '', rate: '', qty: '', kind: 'calendar' };
   const [f, setF] = useState(blank); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
   const toast = useToast();
   useEffect(() => { if (open) { setF(blank); setMessage(''); } }, [pro?.id]);
   async function submit(e) {
     e.preventDefault(); if (!pro) return; setBusy(true);
     try {
-      const { ok, status, data } = await postJSON('/api/bookings', { professionalId: pro.id, bookingUnit: f.unit, startDate: f.start, endDate: f.unit === 'half' ? f.start : (f.end || f.start), message });
+      const { ok, status, data } = await postJSON('/api/bookings', { professionalId: pro.id, ...proposalBody(f, pro.rate_unit || 'day'), message });
       if (!ok) { if (status === 401) { onNeedAuth(pro); return; } throw new Error(data.error || 'Could not send your request.'); }
       onSent(data.booking);
     } catch (err) { toast(err.message || 'Could not connect to backend.'); } finally { setBusy(false); }
@@ -132,7 +138,7 @@ export function BookingModal({ pro, user, onClose, onSent, onNeedAuth }) {
     <Modal open={open} onClose={onClose} labelledBy="bookingTitle">
       <ModalHead tag={pro ? pro.role : 'Booking request'} id="bookingTitle" title={pro ? 'Message ' + pro.name : 'Book a professional'} onClose={onClose} />
       <form onSubmit={submit} className="grid gap-4">
-        <ProposalFields value={f} onChange={setF} canEditRate={false} baseRate={pro?.rate} />
+        <ProposalFields value={f} onChange={setF} canEditRate={false} baseRate={pro?.rate} rateUnit={pro?.rate_unit || 'day'} />
         <Field label="Your message" htmlFor="bookingMessage">
           <textarea id="bookingMessage" className={inputCls + ' min-h-24'} value={message} maxLength={2000} onChange={e => setMessage(e.target.value)} placeholder="Tell them about the job: what you're shooting, where, call time. You can agree changes to the dates and price in the chat." />
         </Field>
