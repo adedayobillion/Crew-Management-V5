@@ -1325,6 +1325,13 @@ async function createBookingRequest(db, user, proId, body, note, group) {
   if (body.dailyRate != null && Number(body.dailyRate) !== Number(p.rate)) o.daily_rate = Number(p.rate), Object.assign(o, priceFor(o.booking_unit, o.start_date, o.end_date, p.rate));
   const clash = await db.query(`SELECT 1 FROM availability_blocks WHERE professional_id = $1 AND NOT (end_date < $2 OR start_date > $3) LIMIT 1`, [proId, o.start_date, o.end_date]);
   if (clash.rows.length) fail(409, (group ? p.name + ' is' : 'This professional is') + ' not available for the requested dates.');
+  // One person, one booking per client for the same dates, even if they list several roles.
+  const crewIds = await crewUserIdsFor(db, proId);
+  const dup = await db.query(
+    `SELECT 1 FROM bookings b WHERE b.user_id = $1::int AND b.status NOT IN ('cancelled','declined','expired','refunded') AND NOT (b.end_date < $3::date OR b.start_date > $4::date)
+       AND (b.professional_id = $2::int OR b.professional_id IN (SELECT p.id FROM professionals p JOIN crew_applications ca ON (ca.professional_id = p.id OR p.application_id = 'app-' || ca.id::text) WHERE ca.user_id = ANY($5::int[]))) LIMIT 1`,
+    [user.id, proId, o.start_date, o.end_date, crewIds]);
+  if (dup.rows.length) fail(409, 'You already have a booking with ' + p.name + ' that overlaps these dates. Open it in Messages to change the details instead of booking them again.');
   const ins = await db.query(
     `INSERT INTO bookings (reference, professional_id, user_id, client_name, client_email, start_date, end_date, project_brief, project_type, project_location, overtime_terms, booking_unit, daily_rate, client_total, crew_net, status, crew_response, group_ref, group_title)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'General','','',$9,$10,$11,$12,'awaiting_review','pending',$13,$14) RETURNING *`,
@@ -1332,7 +1339,6 @@ async function createBookingRequest(db, user, proId, body, note, group) {
   const row = ins.rows[0]; const ref = refFor(row.id);
   await db.query('UPDATE bookings SET reference = $1 WHERE id = $2', [ref, row.id]);
   const booking = { ...row, reference: ref, professional_name: p.name, professional_role: p.role };
-  const crewIds = await crewUserIdsFor(db, proId);
   const msg = await insertChatMessage(db, booking, user, 'request', note || 'Hi, I would like to book you for these dates.', { ...o, proposed_by: 'client', status: 'pending' }, crewIds[0]);
   return { booking, msg, crewId: crewIds[0] };
 }

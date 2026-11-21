@@ -37,16 +37,16 @@ export function Nav({ user, onLogin, onLogout, onDashboard, onCrewDashboard, onS
       <div className="bg-ink py-2 text-xs text-[#dfe6ed]"><div className="mx-auto flex w-[min(1200px,calc(100%-28px))] justify-between gap-3"><span>CREW MANAGEMENT AGENCY · NIGERIA</span><span className="hidden sm:block">Professional production crew. Clear bookings. One trusted platform.</span></div></div>
       <header className="sticky top-1.5 z-30 mx-auto mt-2.5 w-[min(1200px,calc(100%-28px))] sm:top-2.5">
         <div className="relative flex h-[60px] items-center justify-between gap-3 rounded-[17px] border border-white/80 bg-white/75 px-3.5 shadow-[0_10px_40px_#17233714,0_0_0_1px_#17233710] backdrop-blur-xl backdrop-saturate-150 sm:h-[66px] sm:rounded-[20px] sm:px-4">
-          <a href="#" onClick={go(onHome)} className="group flex items-center gap-2.5 whitespace-nowrap font-display font-extrabold tracking-[-.03em]">
+          <a href="#" onClick={go(onHome)} className="group flex min-w-0 shrink items-center gap-2.5 whitespace-nowrap font-display font-extrabold tracking-[-.03em]">
             <motion.span whileHover={{ rotate: -10, scale: 1.08 }} transition={{ type: 'spring', stiffness: 400, damping: 14 }} className="grid size-9 place-items-center rounded-xl bg-lime text-lg shadow-[0_6px_16px_#8ebc4655,inset_0_1px_0_#fff9] sm:size-10">C</motion.span>
-            <span className="text-[11px] leading-tight sm:text-sm">CREW MANAGEMENT<small className="block text-[8px] font-extrabold tracking-[.16em] text-muted max-[430px]:hidden sm:text-[9px]">AGENCY · THE CREW MARKETPLACE</small></span>
+            <span className="min-w-0 truncate text-[11px] leading-tight max-[389px]:hidden sm:text-sm">CREW MANAGEMENT<small className="block text-[8px] font-extrabold tracking-[.16em] text-muted max-[430px]:hidden sm:text-[9px]">AGENCY · THE CREW MARKETPLACE</small></span>
           </a>
           <nav className="hidden gap-6 text-[13px] font-bold md:flex">
             {links.map(([h, l]) => (
               <a key={h} href={h} onClick={h === '#join' ? undefined : () => onHome()} className="group/l relative py-1.5 transition-colors hover:text-[#4d6f12]">{l}<span className="absolute inset-x-0 bottom-0 h-0.5 origin-left scale-x-0 rounded bg-lime-deep transition-transform duration-300 group-hover/l:scale-x-100" /></a>
             ))}
           </nav>
-          <div className="flex items-center gap-1.5 sm:gap-2">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
             {user && <ModeSwitch user={user} onSwitch={onSwitch} className="max-sm:hidden" />}
             <button type="button" onClick={onMessages} aria-label="Messages" title="Messages" className="relative grid size-9 place-items-center rounded-xl text-lg text-ink transition hover:bg-[#edf1f5]">
               <Mail className="size-5" strokeWidth={1.75} aria-hidden="true" />
