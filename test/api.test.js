@@ -181,6 +181,12 @@ test('group booking creates one linked request per crew member', async () => {
   assert.ok(r.body.bookings.every(b => b.group_ref === r.body.group_ref && b.group_title === 'Brand film' && b.status === 'awaiting_review'));
   // pay for the group in one checkout once members accept
   const [b1, b2] = r.body.bookings; const grp = r.body.group_ref;
+  // same person, overlapping dates: no second booking, even under another role
+  const again = await client.a.post('/api/bookings', { professionalId: listingId, startDate: d, endDate: d, message: 'again' });
+  assert.equal(again.status, 409, 'duplicate booking for the same dates is refused');
+  const l3 = (await crew2.a.post('/api/crew/listings', { role: 'Gaffer', category: 'Lighting', location: 'Lagos', rate: 25000, bio: 'Lights' })).body;
+  const l3id = l3.listing && l3.listing.id;
+  assert.ok(l3id, JSON.stringify(l3)); assert.equal((await client.a.post('/api/group-bookings', { professionalIds: [l2, l3id], title: 'Twice', startDate: d, endDate: d })).status, 409, 'one person cannot be booked under two roles on the same dates');
   // each side only sees its own money
   const cm = (await crew.a.get(`/api/bookings/${b1.id}/messages`)).body, km = (await client.a.get(`/api/bookings/${b1.id}/messages`)).body;
   assert.ok(!JSON.stringify(cm).includes('client_total') && JSON.stringify(cm).includes('crew_net'), 'crew sees payout, not the client total');
