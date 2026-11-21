@@ -246,13 +246,14 @@ const OPEN_STATES = ['awaiting_review', 'pending', 'counter_pending', 'confirmed
 const day = d => String(d).slice(0, 10);
 const statusStyle = { pending: 'bg-[#fff1d7] text-[#8b5c09]', accepted: 'bg-[#e3f4d3] text-[#3f6b12]', declined: 'bg-[#fde4e4] text-[#9b2c2c]', superseded: 'bg-[#eef1f4] text-[#64748b]' };
 
-function ActionBar({ thread, busy, panel, setPanel, onComplete, onInvoice, onPay }) {
+function ActionBar({ thread, busy, panel, setPanel, onComplete, onInvoice, onPay, groupDue, onPayGroup }) {
   const role = thread.my_role, st = thread.status, paid = thread.payment_status === 'paid';
   const started = day(thread.start_date) <= new Date(Date.now() + 3600000).toISOString().slice(0, 10);
   const items = [];
   if (role === 'client' && ['awaiting_review', 'pending', 'counter_pending'].includes(st)) items.push(['Withdraw request', () => setPanel('cancel'), 'cancel']);
   if (role === 'crew' && OPEN_STATES.includes(st)) items.push(['Cancel booking', () => setPanel('cancel'), 'cancel']);
   if (role === 'client' && !paid && thread.payment_status !== 'refunded' && ['confirmed', 'in_progress'].includes(st)) items.push(['Pay now ' + naira(thread.client_total), onPay, 'pay', true]);
+  if (groupDue && groupDue.count > 1 && role === 'client' && !paid && ['confirmed', 'in_progress'].includes(st)) items.push(['Pay whole group ' + naira(groupDue.total) + ' (' + groupDue.count + ')', onPayGroup, 'pay', true]);
   if (role === 'client' && paid && ['confirmed', 'in_progress', 'completion_review'].includes(st) && started) items.push(['Job is done', onComplete, null, true]);
   if (['confirmed', 'in_progress', 'completed'].includes(st)) items.push(['Report a problem', () => setPanel('dispute'), 'dispute']);
   if (role === 'client' && st === 'completed' && paid && !Number(thread.review_count)) items.push(['Leave a review', () => setPanel('review'), 'review', true]);
@@ -429,6 +430,19 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
     setError(r.data.error || 'Could not start the payment. Please try again.');
     setBusy(false);
   }
+  const groupDue = (() => {
+    if (!current || !current.group_ref || current.my_role !== 'client') return null;
+    const due = threads.filter(t => t.group_ref === current.group_ref && t.my_role === 'client' && t.payment_status !== 'paid' && t.payment_status !== 'refunded' && ['confirmed', 'in_progress'].includes(t.status));
+    return { count: due.length, total: due.reduce((n, t) => n + Number(t.client_total || 0), 0) };
+  })();
+  async function payGroup() {
+    if (busy) return;
+    setBusy(true); setError('');
+    const r = await postJSON('/api/payments/initialize-group', { group_ref: current.group_ref }).catch(() => ({ ok: false, data: {} }));
+    if (r.ok && r.data.checkout_url) { window.location.assign(r.data.checkout_url); return; }
+    setError(r.data.error || 'Could not start the payment. Please try again.');
+    setBusy(false);
+  }
   const reportProblem = () => runAction(() => postJSON('/api/disputes', { booking_id: current.id, reason }));
   const sendReview = () => runAction(() => postJSON('/api/reviews', { booking_id: current.id, rating: stars, comment: reason }));
   async function showInvoice() {
@@ -502,7 +516,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                       })}
                       {!messages.length && <p className="p-4 text-center text-xs text-muted">No messages yet. Start the conversation.</p>}
                     </div>
-                    <ActionBar thread={current} busy={busy} panel={panel} setPanel={setPanel} onComplete={markComplete} onInvoice={showInvoice} onPay={payNow} />
+                    <ActionBar thread={current} busy={busy} panel={panel} setPanel={setPanel} onComplete={markComplete} onInvoice={showInvoice} onPay={payNow} groupDue={groupDue} onPayGroup={payGroup} />
                     {panel && panel !== 'invoice' && (
                       <form onSubmit={e => { e.preventDefault(); ({ cancel: cancelBooking, dispute: reportProblem, review: sendReview })[panel](); }} className="grid gap-2.5 border-t border-line bg-white p-3.5">
                         <div className="flex items-center justify-between"><strong className="text-sm">{{ cancel: current.my_role === 'crew' ? 'Cancel this booking' : 'Withdraw this request', dispute: 'Report a problem', review: 'Leave a review' }[panel]}</strong><button type="button" className="text-xs text-muted underline" onClick={() => setPanel(null)}>Close</button></div>

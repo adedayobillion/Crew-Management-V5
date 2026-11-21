@@ -336,6 +336,7 @@ async function initDb() {
         expires_at TIMESTAMP NOT NULL
       );
       ALTER TABLE payments ADD COLUMN IF NOT EXISTS checkout_id VARCHAR(255);
+      ALTER TABLE payments ADD COLUMN IF NOT EXISTS booking_ids INT[];
       ALTER TABLE payments ADD COLUMN IF NOT EXISTS checkout_url TEXT;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR(10);
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
@@ -1526,27 +1527,34 @@ async function settleFromBachs(payment) {
     if (cur.status !== 'pending') return { status: cur.status, duplicate: true }; // idempotent
     if (dead) {
       await db.query(`UPDATE payments SET status = 'failed', raw_webhook = $2 WHERE id = $1`, [cur.id, JSON.stringify(session)]);
-      await db.query(`UPDATE bookings SET payment_status = 'failed' WHERE id = $1 AND payment_status <> 'paid'`, [cur.booking_id]);
+      await db.query(`UPDATE bookings SET payment_status = 'failed' WHERE id = ANY($1::int[]) AND payment_status <> 'paid'`, [cur.booking_ids || [cur.booking_id]]);
       return { status: 'failed' };
     }
     if (session.amount != null && Math.abs(Number(session.amount) - Number(cur.amount)) > 0.009) { console.error('Bachs amount mismatch', cur.id, session.amount, cur.amount); return { status: 'amount_mismatch' }; }
     if (session.currency && String(session.currency).toUpperCase() !== 'NGN') { console.error('Bachs currency mismatch', cur.id, session.currency); return { status: 'currency_mismatch' }; }
+    const ids = cur.booking_ids || [cur.booking_id];
+    const done = [];
+    for (const bid of ids) {
+      const booking = (await db.query('SELECT * FROM bookings WHERE id = $1 FOR UPDATE', [bid])).rows[0];
+      if (!booking || booking.payment_status === 'paid') continue;
+      await db.query(`UPDATE bookings SET payment_status = 'paid' WHERE id = $1`, [bid]);
+      const total = cur.booking_ids ? Number(booking.client_total) : Number(cur.amount); const subtotal = total / 1.075;
+      const invNo = `INV-${new Date().getUTCFullYear()}-${String(cur.id).padStart(6, '0')}` + (cur.booking_ids ? '-' + bid : '');
+      await db.query(
+        `INSERT INTO invoices (invoice_number, booking_id, client_name, subtotal, vat_rate, vat_amount, total_amount, supplier_tin) VALUES ($1,$2,$3,$4,7.5,$5,$6,$7) ON CONFLICT (invoice_number) DO NOTHING`,
+        [invNo, bid, booking.client_name || 'Client', subtotal.toFixed(2), (total - subtotal).toFixed(2), total, SUPPLIER_TIN || null]);
+      const crewId = (await crewUserIdsFor(db, booking.professional_id))[0];
+      const sys = (await db.query(`INSERT INTO messages (booking_id,sender_type,sender_name,masked_content,kind,recipient_user_id) VALUES ($1,'system','System',$2,'system',$3) RETURNING *`,
+        [booking.id, 'Payment received. The booking is confirmed and paid.', crewId || null])).rows[0];
+      done.push({ booking, sys, crewId });
+    }
     await db.query(`UPDATE payments SET status = 'verified', raw_webhook = $2 WHERE id = $1`, [cur.id, JSON.stringify(session)]);
-    await db.query(`UPDATE bookings SET payment_status = 'paid' WHERE id = $1`, [cur.booking_id]);
-    const total = Number(cur.amount); const subtotal = total / 1.075;
-    const booking = (await db.query('SELECT * FROM bookings WHERE id = $1', [cur.booking_id])).rows[0];
-    await db.query(
-      `INSERT INTO invoices (invoice_number, booking_id, client_name, subtotal, vat_rate, vat_amount, total_amount, supplier_tin) VALUES ($1,$2,$3,$4,7.5,$5,$6,$7) ON CONFLICT (invoice_number) DO NOTHING`,
-      [`INV-${new Date().getUTCFullYear()}-${String(cur.id).padStart(6, '0')}`, cur.booking_id, (booking && booking.client_name) || 'Client', subtotal.toFixed(2), (total - subtotal).toFixed(2), total, SUPPLIER_TIN || null]);
-    const crewId = (await crewUserIdsFor(db, booking.professional_id))[0];
-    const sys = (await db.query(`INSERT INTO messages (booking_id,sender_type,sender_name,masked_content,kind,recipient_user_id) VALUES ($1,'system','System',$2,'system',$3) RETURNING *`,
-      [booking.id, 'Payment received. The booking is confirmed and paid.', crewId || null])).rows[0];
-    return { status: 'verified', booking, sys, crewId };
+    return { status: 'verified', done };
   }).then(r => {
-    if (r.sys) {
-      broadcastChat(r.booking.id, r.sys);
-      for (const uid of [Number(r.booking.user_id), r.crewId]) if (uid) emitMessageNotification(uid, { type: 'message', booking_id: r.booking.id, reference: r.booking.reference || refFor(r.booking.id), sender_name: 'Payment received', preview: r.sys.masked_content, created_at: r.sys.created_at });
-      afterPayment(r.booking, r.crewId).catch(e => console.warn('afterPayment:', e.message));
+    for (const d of r.done || []) {
+      broadcastChat(d.booking.id, d.sys);
+      for (const uid of [Number(d.booking.user_id), d.crewId]) if (uid) emitMessageNotification(uid, { type: 'message', booking_id: d.booking.id, reference: d.booking.reference || refFor(d.booking.id), sender_name: 'Payment received', preview: d.sys.masked_content, created_at: d.sys.created_at });
+      afterPayment(d.booking, d.crewId).catch(e => console.warn('afterPayment:', e.message));
     }
     return { status: r.status };
   });
@@ -1568,7 +1576,7 @@ app.post('/api/payments/initialize', requireUser, requireVerifiedEmail, wrap(asy
   const amount = Number(b.client_total);
   if (!(amount > 0)) fail(400, 'This booking has no payable amount.');
   // Re-use a recent open checkout instead of creating duplicates when the client taps Pay twice.
-  const open = (await pool.query(`SELECT * FROM payments WHERE booking_id = $1 AND status = 'pending' AND checkout_url IS NOT NULL AND amount = $2 AND created_at > NOW() - INTERVAL '25 minutes' ORDER BY id DESC LIMIT 1`, [b.id, amount])).rows[0];
+  const open = (await pool.query(`SELECT * FROM payments WHERE booking_id = $1 AND booking_ids IS NULL AND status = 'pending' AND checkout_url IS NOT NULL AND amount = $2 AND created_at > NOW() - INTERVAL '25 minutes' ORDER BY id DESC LIMIT 1`, [b.id, amount])).rows[0];
   if (open) return res.json({ success: true, reference: open.gateway_reference, amount, checkout_url: open.checkout_url });
   const reference = `TXN-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
   const base = APP_URL || (req.protocol + '://' + req.get('host'));
@@ -1592,11 +1600,46 @@ app.post('/api/payments/initialize', requireUser, requireVerifiedEmail, wrap(asy
   }
 }));
 
+// Pay for every accepted, unpaid booking of a group in one checkout. Each booking is still paid, invoiced and refunded on its own.
+app.post('/api/payments/initialize-group', requireUser, requireVerifiedEmail, wrap(async (req, res) => {
+  if (!PAYMENTS_ENABLED || !BACHS_API_KEY) fail(503, 'Online payments are not available yet.');
+  const ref = str(req.body && req.body.group_ref, 20);
+  if (!ref) fail(400, 'Missing group.');
+  const rows = (await pool.query(`SELECT * FROM bookings WHERE group_ref = $1 AND user_id = $2 ORDER BY id`, [ref, req.user.id])).rows;
+  if (!rows.length) fail(404, 'Group booking not found.');
+  const due = rows.filter(b => BLOCKING_STATUSES.includes(b.status) && b.payment_status !== 'paid' && b.payment_status !== 'refunded' && Number(b.client_total) > 0);
+  if (!due.length) fail(409, 'Nothing in this group is ready to pay yet. You can pay once crew members accept.');
+  const ids = due.map(b => b.id);
+  const amount = due.reduce((t, b) => t + Number(b.client_total), 0);
+  const open = (await pool.query(`SELECT * FROM payments WHERE booking_ids = $1::int[] AND status = 'pending' AND checkout_url IS NOT NULL AND amount = $2 AND created_at > NOW() - INTERVAL '25 minutes' ORDER BY id DESC LIMIT 1`, [ids, amount])).rows[0];
+  if (open) return res.json({ success: true, reference: open.gateway_reference, amount, count: ids.length, checkout_url: open.checkout_url });
+  const reference = `TXN-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+  const base = APP_URL || (req.protocol + '://' + req.get('host'));
+  const ins = await pool.query(`INSERT INTO payments (booking_id, booking_ids, gateway, gateway_reference, amount, currency, status) VALUES ($1,$2,'bachs',$3,$4,'NGN','pending') RETURNING id`, [ids[0], ids, reference, amount]);
+  try {
+    const session = await bachsFetch('POST', '/v1/checkout-sessions', {
+      pricing: { currency: 'NGN', amount: amount.toFixed(2), price_type: 'fixed' },
+      customer: { email: req.user.email, name: req.user.name },
+      success_url: base + '/?pay=success&booking=' + ids[0],
+      cancel_url: base + '/?pay=cancelled&booking=' + ids[0],
+      reference,
+      metadata: { group_ref: ref, payment_id: ins.rows[0].id, booking_ids: ids.join(',') },
+      expires_in_minutes: 60
+    }, 'crew-' + reference);
+    if (!session.checkout_url || !session.checkout_id) throw Object.assign(new Error('The payment provider returned an incomplete response.'), { status: 502 });
+    await pool.query('UPDATE payments SET checkout_id = $1, checkout_url = $2 WHERE id = $3', [session.checkout_id, session.checkout_url, ins.rows[0].id]);
+    res.json({ success: true, reference, amount, count: ids.length, checkout_url: session.checkout_url });
+  } catch (e) {
+    await pool.query(`UPDATE payments SET status = 'failed' WHERE id = $1`, [ins.rows[0].id]);
+    throw e;
+  }
+}));
+
 // Called when the customer comes back from the hosted checkout (and works even if the webhook is delayed).
 app.post('/api/payments/verify', requireUser, wrap(async (req, res) => {
   const b = await getAccessibleBooking(pool, req, req.body.booking_id);
   if (b.payment_status === 'paid') return res.json({ success: true, status: 'verified' });
-  const p = (await pool.query(`SELECT * FROM payments WHERE booking_id = $1 AND status = 'pending' ORDER BY id DESC LIMIT 1`, [b.id])).rows[0];
+  const p = (await pool.query(`SELECT * FROM payments WHERE (booking_id = $1 OR $1 = ANY(booking_ids)) AND status = 'pending' ORDER BY id DESC LIMIT 1`, [b.id])).rows[0];
   if (!p) return res.json({ success: true, status: 'none' });
   res.json({ success: true, ...(await settleFromBachs(p)) });
 }));
@@ -1712,7 +1755,7 @@ app.get('/api/inbox',requireUser,wrap(async(req,res)=>{
   const crew="EXISTS (SELECT 1 FROM professionals px JOIN crew_applications ca ON (ca.professional_id=px.id OR px.application_id='app-' || ca.id::text) WHERE px.id=b.professional_id AND ca.user_id=$1)";
   const role="CASE WHEN "+client+" THEN 'client' ELSE 'crew' END";
   const {rows}=await pool.query(
-    "SELECT b.id,COALESCE(b.reference,'') AS reference,b.client_name,b.project_type,b.status,b.created_at,b.payment_status,b.start_date,b.end_date,b.booking_unit,b.daily_rate,b.client_total,b.crew_net,b.cancel_reason,b.cancelled_by,b.group_title,(SELECT COUNT(*)::int FROM reviews rv WHERE rv.booking_id=b.id) AS review_count,p.name AS professional_name,"+role+" AS my_role,"+
+    "SELECT b.id,COALESCE(b.reference,'') AS reference,b.client_name,b.project_type,b.status,b.created_at,b.payment_status,b.start_date,b.end_date,b.booking_unit,b.daily_rate,b.client_total,b.crew_net,b.cancel_reason,b.cancelled_by,b.group_title,b.group_ref,(SELECT COUNT(*)::int FROM reviews rv WHERE rv.booking_id=b.id) AS review_count,p.name AS professional_name,"+role+" AS my_role,"+
     "(SELECT m.masked_content FROM messages m WHERE m.booking_id=b.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) AS last_message,"+
     "(SELECT MAX(m.created_at) FROM messages m WHERE m.booking_id=b.id) AS last_message_at,"+
     "(SELECT COUNT(*)::int FROM messages m WHERE m.booking_id=b.id AND ((m.sender_user_id IS NOT NULL AND m.sender_user_id<>$1) OR (m.sender_user_id IS NULL AND m.sender_type<>CASE WHEN "+client+" THEN 'client' ELSE 'crew' END)) "+

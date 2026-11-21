@@ -179,6 +179,23 @@ test('group booking creates one linked request per crew member', async () => {
   const r = await client.a.post('/api/group-bookings', body);
   assert.equal(r.status, 201, JSON.stringify(r.body)); assert.equal(r.body.bookings.length, 2);
   assert.ok(r.body.bookings.every(b => b.group_ref === r.body.group_ref && b.group_title === 'Brand film' && b.status === 'awaiting_review'));
+  // pay for the group in one checkout once members accept
+  const [b1, b2] = r.body.bookings; const grp = r.body.group_ref;
+  assert.equal((await client.a.post('/api/payments/initialize-group', { group_ref: grp })).status, 409, 'nothing accepted yet');
+  const accept = async (who, id) => { const m = (await pool.query(`SELECT id FROM messages WHERE booking_id = $1 AND kind = 'request'`, [id])).rows[0].id; return who.a.post(`/api/bookings/${id}/offers/${m}/respond`, { response: 'accepted' }); };
+  assert.equal((await accept(crew, b1.id)).status, 200); assert.equal((await accept(crew2, b2.id)).status, 200);
+  assert.equal((await crew.a.post('/api/payments/initialize-group', { group_ref: grp })).status, 404, 'only the client pays');
+  const gi = await client.a.post('/api/payments/initialize-group', { group_ref: grp }); assert.equal(gi.status, 200, JSON.stringify(gi.body));
+  assert.equal(gi.body.count, 2); assert.equal(gi.body.amount, Number(b1.client_total) + Number(b2.client_total));
+  const gp = (await pool.query('SELECT checkout_id, gateway_reference FROM payments WHERE booking_ids IS NOT NULL')).rows[0];
+  Object.assign(sessions[gp.checkout_id], { status: 'completed', charge: { status: 'succeeded' } });
+  const gev = signed({ type: 'checkout.session.completed', data: { checkout_id: gp.checkout_id, reference: gp.gateway_reference } });
+  const gw = await fetch(BASE + '/api/payments/webhook', { method: 'POST', headers: { 'content-type': 'application/json', 'x-bachs-signature-v2': gev.sig }, body: gev.raw });
+  assert.equal((await gw.json()).status, 'verified');
+  const paidRows = (await pool.query('SELECT payment_status FROM bookings WHERE group_ref = $1', [grp])).rows;
+  assert.ok(paidRows.length === 2 && paidRows.every(x => x.payment_status === 'paid'), 'both bookings paid');
+  assert.equal((await pool.query('SELECT COUNT(*)::int n FROM invoices WHERE booking_id = ANY($1::int[])', [[b1.id, b2.id]])).rows[0].n, 2, 'one invoice each');
+  assert.equal((await client.a.post('/api/payments/initialize-group', { group_ref: grp })).status, 409, 'nothing left to pay');
   await pool.query('INSERT INTO availability_blocks (professional_id, start_date, end_date) VALUES ($1,$2,$2)', [l2, tomorrow(41)]);
   const before = (await pool.query('SELECT COUNT(*)::int n FROM bookings')).rows[0].n;
   assert.equal((await client.a.post('/api/group-bookings', { ...body, startDate: tomorrow(41), endDate: tomorrow(41) })).status, 409, 'one unavailable member rejects the group');
