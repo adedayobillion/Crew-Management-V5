@@ -341,6 +341,7 @@ async function initDb() {
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR(10);
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS group_ref VARCHAR(20);
+      UPDATE messages SET masked_content = regexp_replace(masked_content, ' · client total ₦[0-9,]+$', ' · rate per day shown in the offer') WHERE kind = 'system' AND masked_content LIKE '% · client total ₦%';
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS group_title TEXT;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS refund_status VARCHAR(20);
@@ -1087,6 +1088,16 @@ async function ownsProfessionalBooking(db, user, booking) {
   return profileIds.includes(Number(booking.professional_id));
 }
 const ownsBooking = (user, b) => b.user_id != null && Number(b.user_id) === Number(user.id);
+// Each side sees only its own money: the client never sees the crew payout, the crew never sees what the client was charged.
+function scrubMoney(x, role) {
+  if (Array.isArray(x)) return x.map(v => scrubMoney(v, role));
+  if (!x || typeof x !== 'object' || x instanceof Date) return x;
+  const hide = role === 'crew' ? ['client_total', 'client_fee', 'clientTotal'] : role === 'client' ? ['crew_net', 'crew_commission', 'crewNet'] : [];
+  const out = {};
+  for (const k of Object.keys(x)) if (!hide.includes(k)) out[k] = scrubMoney(x[k], role);
+  return out;
+}
+const roleOf = (req, b) => (ownsBooking(req.user, b) ? 'client' : 'crew');
 async function canAccessBooking(db, user, b) {
   // Account mode controls the interface, not ownership. Either participant can
   // retain access to their booking conversations after switching Hiring/Crew.
@@ -1282,7 +1293,7 @@ function parseProposal(body, defaultRate) {
   return { booking_unit: unit, start_date: start, end_date: end, daily_rate: rate, ...priceFor(unit, start, end, rate) };
 }
 function offerSummary(o) {
-  return fmtRange(o) + (o.booking_unit === 'half' ? ' · half day' : ' · ' + o.days + ' day' + (o.days === 1 ? '' : 's')) + ' · client total ₦' + Number(o.client_total).toLocaleString('en-NG');
+  return fmtRange(o) + (o.booking_unit === 'half' ? ' · half day' : ' · ' + o.days + ' day' + (o.days === 1 ? '' : 's')) + ' · ₦' + Number(o.daily_rate).toLocaleString('en-NG') + (o.booking_unit === 'half' ? ' half-day rate' : ' per day');
 }
 async function insertChatMessage(db, b, user, kind, text, offer, recipientId) {
   const senderType = ownsBooking(user, b) ? 'client' : 'crew';
@@ -1336,7 +1347,7 @@ app.post('/api/bookings', requireUser, requireApproved, requireVerifiedEmail, wr
   if (recent.rows[0].n >= 10) fail(429, 'You have reached the limit of 10 booking requests per 24 hours.');
   const out = await withTx(db => createBookingRequest(db, req.user, proId, b, note, null));
   pushChat(out.booking, out.msg, out.crewId, req.user);
-  res.status(201).json({ success: true, booking: out.booking });
+  res.status(201).json({ success: true, booking: scrubMoney(out.booking, 'client') });
 }));
 
 // Group booking: one request per crew member for the same dates, each with its own chat, price and payment.
@@ -1354,7 +1365,7 @@ app.post('/api/group-bookings', requireUser, requireApproved, requireVerifiedEma
   const group = { ref: 'GRP-' + crypto.randomBytes(5).toString('hex').toUpperCase(), title };
   const outs = await withTx(async db => { const r = []; for (const id of ids) r.push(await createBookingRequest(db, req.user, id, b, note, group)); return r; });
   for (const o of outs) pushChat(o.booking, o.msg, o.crewId, req.user);
-  res.status(201).json({ success: true, group_ref: group.ref, bookings: outs.map(o => o.booking) });
+  res.status(201).json({ success: true, group_ref: group.ref, bookings: outs.map(o => scrubMoney(o.booking, 'client')) });
 }));
 
 app.get('/api/my/bookings', requireUser, wrap(async (req, res) => {
@@ -1363,7 +1374,7 @@ app.get('/api/my/bookings', requireUser, wrap(async (req, res) => {
        FROM bookings b LEFT JOIN professionals p ON p.id = b.professional_id
       WHERE b.user_id = $1
       ORDER BY b.created_at DESC`, [req.user.id]);
-  res.json({ bookings: rows.map(b => ({ ...b, reference: b.reference || refFor(b.id) })) });
+  res.json({ bookings: rows.map(b => scrubMoney({ ...b, reference: b.reference || refFor(b.id) }, 'client')) });
 }));
 
 // Statuses in which a booking holds an availability block on the professional's calendar.
@@ -1407,7 +1418,7 @@ app.post('/api/bookings/:id/cancel', requireUser, wrap(async (req, res) => {
     return { booking: upd.rows[0], sys, other, mine };
   });
   pushChat(out.booking, out.sys, out.other, req.user);
-  res.json({ success: true, booking: out.booking });
+  res.json({ success: true, booking: scrubMoney(out.booking, roleOf(req, out.booking)) });
 }));
 
 // The client confirms the job was done. Only then can reviews be left and the crew member be paid out.
@@ -1425,7 +1436,7 @@ app.post('/api/bookings/:id/complete', requireUser, wrap(async (req, res) => {
     return { booking: upd.rows[0], sys, other };
   });
   pushChat(out.booking, out.sys, out.other, req.user);
-  res.json({ success: true, booking: out.booking });
+  res.json({ success: true, booking: scrubMoney(out.booking, roleOf(req, out.booking)) });
 }));
 
 // Requests nobody answers within 48 hours lapse, so dates are not held hostage and clients are not left waiting.
@@ -1471,7 +1482,7 @@ app.post('/api/bookings/:id/counter-response', requireUser, wrap(async (req, res
   });
   const { _crew, ...answered } = booking;
   notifyBooking(_crew, answered, response === 'approved' ? 'Counter-offer accepted' : 'Counter-offer declined', (answered.reference || refFor(answered.id)) + ' (' + fmtRange(answered) + ').');
-  res.json({ success: true, booking: answered });
+  res.json({ success: true, booking: scrubMoney(answered, roleOf(req, answered)) });
 }));
 
 /* ---------------- payments & invoices ---------------- */
@@ -1657,6 +1668,7 @@ app.post('/api/payments/webhook', wrap(async (req, res) => {
 
 app.get('/api/invoices/:booking_id', requireUser, wrap(async (req, res) => {
   const b = await getAccessibleBooking(pool, req, req.params.booking_id);
+  if (!ownsBooking(req.user, b)) fail(403, 'Invoices are issued to the client who paid.');
   const { rows } = await pool.query('SELECT * FROM invoices WHERE booking_id = $1', [b.id]);
   if (!rows[0]) fail(404, 'Invoice not found.');
   res.json(rows[0]);
@@ -1707,7 +1719,7 @@ const messageNotificationSubs = new Map();
 /* Live updates reach every replica through Postgres LISTEN/NOTIFY: deliver to our own SSE clients now and tell the others. */
 const INSTANCE_ID = crypto.randomBytes(6).toString('hex');
 function deliverLocal(evt) {
-  if (evt.t === 'chat') { for (const sub of chatSubs.get(evt.b) || []) { try { sub.write('data: ' + JSON.stringify(evt.row) + '\n\n'); } catch (e) { /* client gone */ } } }
+  if (evt.t === 'chat') { for (const sub of chatSubs.get(evt.b) || []) { try { sub.write('data: ' + JSON.stringify(scrubMoney(evt.row, sub.cmaRole)) + '\n\n'); } catch (e) { /* client gone */ } } }
   else if (evt.t === 'note') { for (const sub of messageNotificationSubs.get(Number(evt.u)) || []) { try { sub.write('data: ' + JSON.stringify(evt.p) + '\n\n'); } catch (e) { /* client gone */ } } }
 }
 function relay(evt) {
@@ -1762,7 +1774,7 @@ app.get('/api/inbox',requireUser,wrap(async(req,res)=>{
     "AND NOT EXISTS(SELECT 1 FROM message_reads mr WHERE mr.message_id=m.id AND mr.user_id=$1)) AS unread_count "+
     "FROM bookings b LEFT JOIN professionals p ON p.id=b.professional_id WHERE "+client+" OR "+crew+
     " ORDER BY COALESCE((SELECT MAX(m.created_at) FROM messages m WHERE m.booking_id=b.id),b.created_at) DESC LIMIT 100",[uid]);
-  res.json({conversations:rows.map(b=>({...b,reference:b.reference||refFor(b.id),unread_count:Number(b.unread_count||0)}))});
+  res.json({conversations:rows.map(b=>scrubMoney({...b,reference:b.reference||refFor(b.id),unread_count:Number(b.unread_count||0)}, b.my_role))});
 }));
 app.post('/api/inbox/:bookingId/read',requireUser,wrap(async(req,res)=>{
   const booking=await getAccessibleBooking(pool,req,req.params.bookingId);
@@ -1775,7 +1787,7 @@ app.post('/api/inbox/:bookingId/read',requireUser,wrap(async(req,res)=>{
 app.get('/api/bookings/:id/messages', requireUser, wrap(async (req, res) => {
   const b = await getAccessibleBooking(pool, req, req.params.id);
   const { rows } = await pool.query('SELECT * FROM messages WHERE booking_id = $1 ORDER BY created_at ASC', [b.id]);
-  res.json(rows);
+  res.json(scrubMoney(rows, roleOf(req, b)));
 }));
 
 // Live delivery: one Server-Sent Events stream per open chat, fed by an in-process subscriber map (single replica).
@@ -1786,6 +1798,7 @@ app.get('/api/bookings/:id/messages/stream', requireUser, wrap(async (req, res) 
   res.flushHeaders();
   res.write('retry: 3000\n\n');
   if (!chatSubs.has(b.id)) chatSubs.set(b.id, new Set());
+  res.cmaRole = roleOf(req, b);
   chatSubs.get(b.id).add(res);
   const ping = setInterval(() => res.write(': ping\n\n'), 25000);
   req.on('close', () => { clearInterval(ping); const set = chatSubs.get(b.id); if (set) { set.delete(res); if (!set.size) chatSubs.delete(b.id); } });
@@ -1805,7 +1818,7 @@ app.post('/api/bookings/:id/messages', requireUser, wrap(async (req, res) => {
     emitMessageNotification(recipientId,{type:'message',booking_id:b.id,reference:b.reference||refFor(b.id),sender_name:req.user.name,preview:rows[0].masked_content,created_at:rows[0].created_at});
     emailNewMessage(recipientId, b, req.user.name, rows[0].masked_content).catch(() => {});
   }
-  res.status(201).json(rows[0]);
+  res.status(201).json(scrubMoney(rows[0], senderType));
 }));
 
 const OPEN_FOR_OFFERS = ['awaiting_review', 'pending', 'counter_pending', 'confirmed'];
@@ -1832,7 +1845,7 @@ app.post('/api/bookings/:id/offers', requireUser, wrap(async (req, res) => {
     return { b, msg, other };
   });
   pushChat(out.b, out.msg, out.other, req.user);
-  res.status(201).json({ success: true, message: out.msg });
+  res.status(201).json({ success: true, message: scrubMoney(out.msg, roleOf(req, out.b || out.booking || { user_id: null })) });
 }));
 
 app.post('/api/bookings/:id/offers/:messageId/respond', requireUser, wrap(async (req, res) => {
@@ -1880,7 +1893,7 @@ app.post('/api/bookings/:id/offers/:messageId/respond', requireUser, wrap(async 
   });
   broadcastChat(out.b.id, out.updated);
   pushChat(out.b, out.sys, out.other, req.user);
-  res.json({ success: true, booking: out.b });
+  res.json({ success: true, booking: scrubMoney(out.b, roleOf(req, out.b)) });
 }));
 
 

@@ -93,7 +93,7 @@ export function ResetModal({ token, onClose, onDone }) {
 }
 
 /* ================= Booking: dates + a message; everything else is agreed in the chat ================= */
-export function ProposalFields({ value, onChange, canEditRate, baseRate, hideQuote }) {
+export function ProposalFields({ value, onChange, canEditRate, baseRate, hideQuote, viewer = 'client' }) {
   const set = patch => onChange(v => { const n = { ...v, ...patch }; if (n.unit === 'half') n.end = n.start; else if (n.end && n.start && n.end < n.start) n.end = n.start; return n; });
   const q = quote(value.unit, value.start, value.end, value.rate || baseRate);
   return (
@@ -109,7 +109,7 @@ export function ProposalFields({ value, onChange, canEditRate, baseRate, hideQuo
       </div>
       {canEditRate && <Field label="Daily rate (₦)" htmlFor="pf-rate"><input id="pf-rate" type="number" min="1" step="1" inputMode="numeric" className={inputCls} value={value.rate} onChange={e => set({ rate: e.target.value })} /></Field>}
       {!hideQuote && <p className="rounded-xl bg-[#f5f7f3] px-3.5 py-2.5 text-xs text-[#445468]" aria-live="polite">
-        {naira(value.rate || baseRate)}/day × {q.days} {q.days === 1 ? 'day' : q.days === 0.5 ? 'day' : 'days'} + 10% service fee = <strong className="text-ink">{naira(q.clientTotal)}</strong> total
+        {naira(value.rate || baseRate)}/day × {q.days} {q.days === 1 ? 'day' : q.days === 0.5 ? 'day' : 'days'} {viewer === 'crew' ? <> − 10% commission = <strong className="text-ink">{naira(q.crewNet)}</strong> to you</> : <> + 10% service fee = <strong className="text-ink">{naira(q.clientTotal)}</strong> total</>}
       </p>}
     </div>
   );
