@@ -5,7 +5,7 @@ import { ExternalLink, Plus, Pencil } from 'lucide-react';
 
 const CATEGORIES = ['Camera', 'Production', 'Editing', 'Lighting', 'Sound', 'Creative'];
 const panel = 'rounded-2xl border border-line bg-white p-5';
-const emptyForm = { role: '', category: 'Camera', location: '', rate: '', skills: '', showreel: '', bio: '' };
+const emptyForm = { role: '', category: 'Camera', location: '', rate: '', rateUnit: 'day', skills: '', showreel: '', bio: '' };
 
 export default function CrewListing({ toast }) {
   const [data, setData] = useState(null);
@@ -32,7 +32,7 @@ export default function CrewListing({ toast }) {
     setEditing(false);
   }
   function toForm(l) {
-    return { role: l.role || '', category: l.category || 'Camera', location: l.location || '', rate: String(l.rate || ''), skills: (Array.isArray(l.skills) ? l.skills : []).join(', '), showreel: l.showreel || '', bio: l.bio || '' };
+    return { role: l.role || '', category: l.category || 'Camera', location: l.location || '', rate: String(l.rate || ''), rateUnit: l.rate_unit || 'day', skills: (Array.isArray(l.skills) ? l.skills : []).join(', '), showreel: l.showreel || '', bio: l.bio || '' };
   }
   useEffect(() => { load(); }, []);
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
@@ -110,7 +110,8 @@ export default function CrewListing({ toast }) {
             <Field label="Professional role" htmlFor="clRole"><input id="clRole" className={inputCls} required maxLength={80} value={form.role} onChange={set('role')} placeholder="e.g. Director of Photography" /></Field>
             <Field label="Category" htmlFor="clCat"><select id="clCat" className={inputCls} value={form.category} onChange={set('category')}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></Field>
             <Field label="Location" htmlFor="clLocation"><input id="clLocation" className={inputCls} maxLength={120} value={form.location} onChange={set('location')} placeholder="Lagos, Nigeria" /></Field>
-            <Field label="Daily rate (₦)" htmlFor="clRate"><input id="clRate" type="number" min="1000" max="10000000" step="500" className={inputCls} required value={form.rate} onChange={set('rate')} /></Field>
+            <Field label="How do you charge?" htmlFor="clUnit"><select id="clUnit" className={inputCls} value={form.rateUnit} onChange={set('rateUnit')}><option value="day">Per day (full or half day)</option><option value="hour">Per hour</option><option value="project">Flat project fee</option></select></Field>
+            <Field label={form.rateUnit === 'hour' ? 'Hourly rate (₦)' : form.rateUnit === 'project' ? 'Starting project fee (₦)' : 'Daily rate (₦)'} htmlFor="clRate"><input id="clRate" type="number" min="1000" max="10000000" step="500" className={inputCls} required value={form.rate} onChange={set('rate')} /></Field>
             <Field label="Portfolio / showreel link" htmlFor="clReel" full><input id="clReel" type="url" className={inputCls} maxLength={300} value={form.showreel} onChange={set('showreel')} placeholder="https://vimeo.com/… or your portfolio website" /></Field>
             <Field label="Skills (comma separated)" htmlFor="clSkills" full><input id="clSkills" className={inputCls} value={form.skills} onChange={set('skills')} placeholder="Steadicam, Drone, Anamorphic" /></Field>
             <Field label="About this service" htmlFor="clBio" full><textarea id="clBio" className={inputCls + ' min-h-24'} maxLength={1000} value={form.bio} onChange={set('bio')} placeholder="Describe your experience and the work you offer." /></Field>
@@ -122,7 +123,7 @@ export default function CrewListing({ toast }) {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-3">
                 {selected.photo ? <img src={selected.photo} alt="" className="size-14 rounded-xl object-cover" /> : <div className="grid size-14 place-items-center rounded-xl bg-[#eef2ea] text-xs text-muted">No photo</div>}
-                <div><strong className="block">{selected.role}</strong><span className="text-xs text-muted">{selected.category} · {selected.location} · ₦{Number(selected.rate).toLocaleString('en-NG')}/day</span><span className="mt-1 block text-[11px] text-muted">{selected.is_active ? 'Live on marketplace' : 'Paused'}</span></div>
+                <div><strong className="block">{selected.role}</strong><span className="text-xs text-muted">{selected.category} · {selected.location} · ₦{Number(selected.rate).toLocaleString('en-NG')}{selected.rate_unit === 'hour' ? '/hour' : selected.rate_unit === 'project' ? ' per project' : '/day'}</span><span className="mt-1 block text-[11px] text-muted">{selected.is_active ? 'Live on marketplace' : 'Paused'}</span></div>
               </div>
               <div className="flex flex-wrap gap-2"><Button size="sm" onClick={() => { setForm(toForm(selected)); setEditing(true); }}><Pencil className="size-3.5" />Edit listing</Button><Button size="sm" variant="ghost" onClick={togglePaused}>{selected.is_active ? 'Pause listing' : 'Publish listing'}</Button></div>
             </div>

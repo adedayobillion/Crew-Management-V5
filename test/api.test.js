@@ -213,3 +213,26 @@ test('group booking creates one linked request per crew member', async () => {
   assert.equal((await client.a.post('/api/group-bookings', { ...body, startDate: tomorrow(41), endDate: tomorrow(41) })).status, 409, 'one unavailable member rejects the group');
   assert.equal((await pool.query('SELECT COUNT(*)::int n FROM bookings')).rows[0].n, before, 'nothing partially created');
 });
+
+test('hourly and flat-fee listings: quantity, delivery date, calendar blocking', async () => {
+  const hr = await register('Hourly Crew', 'crew'); await pool.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [hr.id]);
+  const lh = (await hr.a.post('/api/crew/listings', { role: 'Editor', category: 'Editing', location: 'Lagos', rate: 10000, rateUnit: 'hour', bio: 'Edits' })).body.listing;
+  const lp = (await hr.a.post('/api/crew/listings', { role: 'Colourist', category: 'Editing', location: 'Lagos', rate: 150000, rateUnit: 'project', bio: 'Grades' })).body.listing;
+  assert.equal(lh.rate_unit, 'hour'); assert.equal(lp.rate_unit, 'project');
+  const d = tomorrow(60), d2 = tomorrow(63);
+  assert.equal((await client.a.post('/api/bookings', { professionalId: lh.id, startDate: d, quantity: 0 })).status, 400, 'hours required');
+  const h = await client.a.post('/api/bookings', { professionalId: lh.id, startDate: d, quantity: 3.5, message: 'edit' });
+  assert.equal(h.status, 201, JSON.stringify(h.body));
+  assert.equal(Number(h.body.booking.client_total), 38500); assert.equal(h.body.booking.crew_net, undefined);
+  const dl = await client.a.post('/api/bookings', { professionalId: lp.id, scheduleKind: 'delivery', deliveryDate: d2, message: 'grade' });
+  assert.equal(dl.status, 201, JSON.stringify(dl.body));
+  assert.equal(dl.body.booking.schedule_kind, 'delivery'); assert.equal(Number(dl.body.booking.client_total), 165000);
+  assert.equal((await client.a.post('/api/bookings', { professionalId: lp.id, scheduleKind: 'delivery', deliveryDate: '2020-01-01' })).status, 400, 'past delivery date');
+  // a delivery project does not block the crew calendar when accepted
+  const mid = (await pool.query(`SELECT id FROM messages WHERE booking_id = $1 AND kind = 'request'`, [dl.body.booking.id])).rows[0].id;
+  assert.equal((await hr.a.post(`/api/bookings/${dl.body.booking.id}/offers/${mid}/respond`, { response: 'accepted' })).status, 200);
+  assert.equal((await pool.query(`SELECT COUNT(*)::int n FROM availability_blocks WHERE professional_id = $1`, [lp.id])).rows[0].n, 0, 'delivery bookings leave the calendar free');
+  const cal = await client.a.post('/api/bookings', { professionalId: lp.id, scheduleKind: 'calendar', startDate: tomorrow(70), endDate: tomorrow(72), message: 'on set' });
+  assert.equal(cal.status, 201); assert.equal(cal.body.booking.schedule_kind, 'calendar');
+  assert.equal((await client.a.post('/api/group-bookings', { professionalIds: [lh.id, listingId], title: 'x', startDate: tomorrow(80), endDate: tomorrow(80) })).status, 400, 'hourly crew cannot join a group');
+});
