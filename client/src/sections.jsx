@@ -325,7 +325,7 @@ export function Dashboard({ onBack, onJoin, openAuth, toast, user, onMessages })
               <div><strong>{b.pro}</strong><br /><span className="text-muted">{b.role}</span></div>
               <div>{b.date}{b.end && b.end !== b.date ? ' to ' + b.end : ''}<br /><span className="text-muted">{b.unit === 'half' ? 'Half day' : 'Full day(s)'}</span></div>
               <div><span className="inline-flex items-center gap-1.5 rounded-full bg-[#fff1d7] px-2.5 py-1 text-[10px] font-extrabold capitalize text-[#8b5c09]"><span className="size-[5px] rounded-full bg-current" />{b.status}</span><br /><span className="text-muted">Ref: {b.id}</span></div>
-              <div><strong>{naira(b.clientTotal)}</strong><br /><span className="text-muted">client total</span><div className="mt-2"><Button size="sm" variant="ghost" onClick={() => onMessages?.(b.dbId)}>Open chat</Button></div></div>
+              <div><strong>{naira(b.clientTotal)}</strong><br /><span className="text-muted">you pay</span><div className="mt-2"><Button size="sm" variant="ghost" onClick={() => onMessages?.(b.dbId)}>Open chat</Button></div></div>
             </motion.div>
           ))}
       </div>

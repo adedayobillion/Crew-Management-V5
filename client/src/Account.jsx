@@ -257,7 +257,7 @@ function ActionBar({ thread, busy, panel, setPanel, onComplete, onInvoice, onPay
   if (role === 'client' && paid && ['confirmed', 'in_progress', 'completion_review'].includes(st) && started) items.push(['Job is done', onComplete, null, true]);
   if (['confirmed', 'in_progress', 'completed'].includes(st)) items.push(['Report a problem', () => setPanel('dispute'), 'dispute']);
   if (role === 'client' && st === 'completed' && paid && !Number(thread.review_count)) items.push(['Leave a review', () => setPanel('review'), 'review', true]);
-  if (paid) items.push(['Invoice', onInvoice, 'invoice']);
+  if (paid && role === 'client') items.push(['Invoice', onInvoice, 'invoice']);
   if (!items.length) return null;
   return (
     <div className="flex flex-wrap gap-2 border-t border-line bg-[#fafbfa] px-4 py-2">
@@ -282,9 +282,18 @@ function OfferCard({ message, thread, busy, onRespond }) {
         <dt className="text-muted">Dates</dt><dd className="text-right font-bold">{day(o.start_date)}{o.end_date !== o.start_date ? ' to ' + day(o.end_date) : ''}</dd>
         <dt className="text-muted">Length</dt><dd className="text-right font-bold">{o.booking_unit === 'half' ? 'Half day' : o.days + (o.days === 1 ? ' day' : ' days')}</dd>
         <dt className="text-muted">Daily rate</dt><dd className="text-right font-bold">{naira(o.daily_rate)}</dd>
-        {mineRole === 'crew'
-          ? <><dt className="text-muted">You receive</dt><dd className="text-right font-extrabold">{naira(o.crew_net)}</dd></>
-          : <><dt className="text-muted">Total (incl. 10% fee)</dt><dd className="text-right font-extrabold">{naira(o.client_total)}</dd></>}
+        {(() => {
+          const base = Math.round(Number(o.daily_rate || 0) * Number(o.days || 1));
+          return mineRole === 'crew' ? (<>
+            <dt className="text-muted">Booking value</dt><dd className="text-right font-bold">{naira(base)}</dd>
+            <dt className="text-muted">Platform commission (10%)</dt><dd className="text-right font-bold">−{naira(base - Number(o.crew_net || 0))}</dd>
+            <dt className="border-t border-line pt-1.5 font-extrabold">You receive</dt><dd className="border-t border-line pt-1.5 text-right font-extrabold">{naira(o.crew_net)}</dd>
+          </>) : (<>
+            <dt className="text-muted">Subtotal</dt><dd className="text-right font-bold">{naira(base)}</dd>
+            <dt className="text-muted">Service fee (10%)</dt><dd className="text-right font-bold">+{naira(Number(o.client_total || 0) - base)}</dd>
+            <dt className="border-t border-line pt-1.5 font-extrabold">You pay</dt><dd className="border-t border-line pt-1.5 text-right font-extrabold">{naira(o.client_total)}</dd>
+          </>);
+        })()}
       </dl>
       {o.status === 'pending' && !proposedByMe && (
         <div className="mt-3 flex gap-2">
@@ -538,7 +547,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                     {propose && (
                       <form onSubmit={sendProposal} className="grid gap-3 border-t border-line bg-white p-3.5">
                         <div className="flex items-center justify-between"><strong className="text-sm">Propose a change</strong><button type="button" className="text-xs text-muted underline" onClick={() => setPropose(null)}>Cancel</button></div>
-                        <ProposalFields value={propose} onChange={setPropose} canEditRate={current.my_role === 'crew'} baseRate={Number(current.daily_rate || 0)} />
+                        <ProposalFields value={propose} onChange={setPropose} canEditRate={current.my_role === 'crew'} viewer={current.my_role} baseRate={Number(current.daily_rate || 0)} />
                         <input className={inputCls} value={note} maxLength={1000} onChange={e => setNote(e.target.value)} placeholder="Add a note (optional)" />
                         <Button type="submit" disabled={busy || !propose.start}>{busy ? 'Sending…' : 'Send proposal'}</Button>
                       </form>

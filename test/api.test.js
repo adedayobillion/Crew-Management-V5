@@ -181,6 +181,12 @@ test('group booking creates one linked request per crew member', async () => {
   assert.ok(r.body.bookings.every(b => b.group_ref === r.body.group_ref && b.group_title === 'Brand film' && b.status === 'awaiting_review'));
   // pay for the group in one checkout once members accept
   const [b1, b2] = r.body.bookings; const grp = r.body.group_ref;
+  // each side only sees its own money
+  const cm = (await crew.a.get(`/api/bookings/${b1.id}/messages`)).body, km = (await client.a.get(`/api/bookings/${b1.id}/messages`)).body;
+  assert.ok(!JSON.stringify(cm).includes('client_total') && JSON.stringify(cm).includes('crew_net'), 'crew sees payout, not the client total');
+  assert.ok(!JSON.stringify(km).includes('crew_net') && JSON.stringify(km).includes('client_total'), 'client sees total, not the payout');
+  const ci = (await crew.a.get('/api/inbox')).body.conversations, ki = (await client.a.get('/api/inbox')).body.conversations;
+  assert.ok(ci.length && ci.every(x => x.client_total === undefined && x.crew_net !== undefined), 'crew inbox'); assert.ok(ki.length && ki.every(x => x.crew_net === undefined && x.client_total !== undefined), 'client inbox');
   assert.equal((await client.a.post('/api/payments/initialize-group', { group_ref: grp })).status, 409, 'nothing accepted yet');
   const accept = async (who, id) => { const m = (await pool.query(`SELECT id FROM messages WHERE booking_id = $1 AND kind = 'request'`, [id])).rows[0].id; return who.a.post(`/api/bookings/${id}/offers/${m}/respond`, { response: 'accepted' }); };
   assert.equal((await accept(crew, b1.id)).status, 200); assert.equal((await accept(crew2, b2.id)).status, 200);
