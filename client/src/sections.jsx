@@ -123,7 +123,7 @@ export function SectionHead({ tag, title, children }) {
     </Reveal>
   );
 }
-function ProCard({ p, i, saved, onSave, onBook }) {
+function ProCard({ p, i, saved, onSave, onBook, inGroup, onGroup }) {
   return (
     <motion.div layout initial={{ opacity: 0, y: 26, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.18 } }} transition={{ duration: 0.5, delay: Math.min(i, 8) * 0.06, ease: [0.22, 1, 0.36, 1] }} className="flex">
       <SpotlightCard className="flex w-full flex-col rounded-[19px] border border-line bg-white shadow-[0_1px_2px_#1723370a] transition-shadow duration-300 hover:border-[#d3dfb8] hover:shadow-lift">
@@ -144,21 +144,24 @@ function ProCard({ p, i, saved, onSave, onBook }) {
           {p.showreel && <a href={p.showreel} target="_blank" rel="noopener noreferrer" className="mb-3 inline-flex w-fit items-center gap-1.5 text-xs font-extrabold text-[#5f7f22] underline underline-offset-4">View portfolio <ArrowUpRight className="size-3.5" aria-hidden="true" /></a>}
           <div className="mt-auto flex items-center justify-between gap-2.5 border-t border-[#edf0f1] pt-3.5">
             <div><strong className="font-display text-lg tracking-[-.04em] sm:text-[19px]">{naira(p.rate)}</strong><small className="block text-[10px] text-muted">indicative / day · {p.credits}{p.reviewCount > 0 && p.rating != null ? ' · ★ ' + p.rating.toFixed(1) + ' (' + p.reviewCount + ')' : ''}</small></div>
-            <Button size="sm" variant="dark" onClick={() => onBook(p)}>Request booking</Button>
+            <div className="flex items-center gap-1.5">
+              <button type="button" aria-pressed={inGroup} onClick={() => onGroup(p.id)} className={cn('rounded-full border px-3 py-2 text-xs font-extrabold transition-colors', inGroup ? 'border-lime-deep bg-lime-soft text-ink' : 'border-line bg-white text-[#536072] hover:border-ink/30')}>{inGroup ? '✓ In group' : '+ Group'}</button>
+              <Button size="sm" variant="dark" onClick={() => onBook(p)}>Request booking</Button>
+            </div>
           </div>
         </div>
       </SpotlightCard>
     </motion.div>
   );
 }
-export function Discover({ pros, loading, filters, setFilters, saved, onSave, onBook }) {
+export function Discover({ pros, loading, filters, setFilters, saved, onSave, onBook, group, onGroup, onGroupOpen, onGroupClear }) {
   const q = filters.q.toLowerCase().trim();
   let list = pros.filter(p => (!q || (p.name + ' ' + p.role + ' ' + p.category + ' ' + p.skills.join(' ')).toLowerCase().includes(q)) && (!filters.category || p.category === filters.category) && (!filters.location || p.location === filters.location));
   if (filters.sort === 'price-low') list = [...list].sort((a, b) => a.rate - b.rate);
   const chips = [['', 'All professionals'], ...CATEGORIES.map(c => [c, c])];
   return (
     <section id="discover" className="mx-auto w-[min(1200px,calc(100%-28px))] py-10 sm:py-14">
-      <SectionHead tag="Discover talent" title="Book professionals for your next production.">Browse available crew, compare day rates and send a booking request in a few taps. Keep all payments and chats in the app.</SectionHead>
+      <SectionHead tag="Discover talent" title="Book professionals for your next production.">Browse available crew, compare day rates and send a booking request in a few taps. Need several people? Tap “+ Group” on each card to book a whole crew in one go. Keep all payments and chats in the app.</SectionHead>
       <div className="no-scrollbar -mx-0.5 mb-4 flex gap-2 overflow-x-auto px-0.5 pb-2 sm:flex-wrap">
         {chips.map(([v, l]) => (
           <motion.button key={v} whileTap={{ scale: 0.94 }} whileHover={{ y: -2 }} onClick={() => setFilters(f => ({ ...f, category: v }))} aria-pressed={filters.category === v}
@@ -173,8 +176,14 @@ export function Discover({ pros, loading, filters, setFilters, saved, onSave, on
         <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3 lg:gap-[18px]">{Array.from({ length: 6 }, (_, i) => <SkeletonCard key={i} />)}</div>
       ) : (
         <motion.div layout className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3 lg:gap-[18px]">
-          <AnimatePresence mode="popLayout">{list.map((p, i) => <ProCard key={p.id} p={p} i={i} saved={saved.has(p.id)} onSave={onSave} onBook={onBook} />)}</AnimatePresence>
+          <AnimatePresence mode="popLayout">{list.map((p, i) => <ProCard key={p.id} p={p} i={i} saved={saved.has(p.id)} onSave={onSave} onBook={onBook} inGroup={group.has(p.id)} onGroup={onGroup} />)}</AnimatePresence>
         </motion.div>
+      )}
+      {group.size > 0 && (
+        <div className="fixed inset-x-3 bottom-3 z-40 mx-auto flex max-w-[560px] items-center justify-between gap-3 rounded-2xl bg-ink px-4 py-3 text-white shadow-lift">
+          <span className="text-sm font-extrabold">{group.size} selected{group.size < 2 ? ' · add at least 2' : ''}</span>
+          <span className="flex items-center gap-2"><button type="button" onClick={onGroupClear} className="text-xs text-[#c3ced9] underline">Clear</button><Button size="sm" disabled={group.size < 2} onClick={onGroupOpen}>Request group booking</Button></span>
+        </div>
       )}
       {!loading && !list.length && <div className="rounded-2xl border border-dashed border-[#cbd3d7] bg-white p-8 text-center text-muted">No professionals match those filters. Try a different role or category.</div>}
     </section>

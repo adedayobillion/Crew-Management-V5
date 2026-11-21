@@ -93,7 +93,7 @@ export function ResetModal({ token, onClose, onDone }) {
 }
 
 /* ================= Booking: dates + a message; everything else is agreed in the chat ================= */
-export function ProposalFields({ value, onChange, canEditRate, baseRate }) {
+export function ProposalFields({ value, onChange, canEditRate, baseRate, hideQuote }) {
   const set = patch => onChange(v => { const n = { ...v, ...patch }; if (n.unit === 'half') n.end = n.start; else if (n.end && n.start && n.end < n.start) n.end = n.start; return n; });
   const q = quote(value.unit, value.start, value.end, value.rate || baseRate);
   return (
@@ -108,9 +108,9 @@ export function ProposalFields({ value, onChange, canEditRate, baseRate }) {
         {value.unit === 'full' && <Field label="End date" htmlFor="pf-end"><input id="pf-end" type="date" required min={value.start || todayLagos()} className={inputCls} value={value.end} onChange={e => set({ end: e.target.value })} /></Field>}
       </div>
       {canEditRate && <Field label="Daily rate (₦)" htmlFor="pf-rate"><input id="pf-rate" type="number" min="1" step="1" inputMode="numeric" className={inputCls} value={value.rate} onChange={e => set({ rate: e.target.value })} /></Field>}
-      <p className="rounded-xl bg-[#f5f7f3] px-3.5 py-2.5 text-xs text-[#445468]" aria-live="polite">
+      {!hideQuote && <p className="rounded-xl bg-[#f5f7f3] px-3.5 py-2.5 text-xs text-[#445468]" aria-live="polite">
         {naira(value.rate || baseRate)}/day × {q.days} {q.days === 1 ? 'day' : q.days === 0.5 ? 'day' : 'days'} + 10% service fee = <strong className="text-ink">{naira(q.clientTotal)}</strong> total
-      </p>
+      </p>}
     </div>
   );
 }
@@ -138,6 +138,40 @@ export function BookingModal({ pro, user, onClose, onSent, onNeedAuth }) {
         </Field>
         <Button variant="dark" type="submit" disabled={busy || !f.start} className="w-full">{busy ? 'Sending…' : <>Send request <ArrowUpRight className="size-4" aria-hidden="true" /></>}</Button>
         <p className="text-center text-[11px] leading-relaxed text-muted">This opens a conversation in your inbox. Nothing is confirmed or charged until {pro?.name || 'the crew member'} accepts the dates and price in the chat.</p>
+      </form>
+    </Modal>
+  );
+}
+
+export function GroupModal({ pros, user, onClose, onSent, onNeedAuth }) {
+  const open = pros.length > 0; const blank = { unit: 'full', start: '', end: '', rate: '' };
+  const [f, setF] = useState(blank); const [title, setTitle] = useState(''); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  useEffect(() => { if (open) { setF(blank); setTitle(''); setMessage(''); } }, [open]);
+  const days = quote(f.unit, f.start, f.end || f.start, 1).days || 0;
+  const base = pros.reduce((t, p) => t + Math.round(Number(p.rate) * days), 0);
+  const total = base + Math.round(base * 0.1);
+  async function submit(e) {
+    e.preventDefault(); setBusy(true);
+    try {
+      const { ok, status, data } = await postJSON('/api/group-bookings', { professionalIds: pros.map(p => p.id), title, bookingUnit: f.unit, startDate: f.start, endDate: f.unit === 'half' ? f.start : (f.end || f.start), message });
+      if (!ok) { if (status === 401) { onNeedAuth(); return; } throw new Error(data.error || 'Could not send your requests.'); }
+      onSent(data);
+    } catch (err) { toast(err.message || 'Could not connect to backend.'); } finally { setBusy(false); }
+  }
+  return (
+    <Modal open={open} onClose={onClose} labelledBy="groupTitle">
+      <ModalHead tag="Group booking" id="groupTitle" title={`Book ${pros.length} professionals`} onClose={onClose} />
+      <form onSubmit={submit} className="grid gap-4">
+        <ul className="grid gap-1.5 rounded-xl border border-line bg-white p-3 text-sm">
+          {pros.map(p => <li key={p.id} className="flex justify-between gap-3"><span><strong>{p.name}</strong> <span className="text-muted">· {p.role}</span></span><span>{naira(p.rate)}/day</span></li>)}
+        </ul>
+        <Field label="Project title" htmlFor="groupProject"><input id="groupProject" className={inputCls} required maxLength={120} value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Brand film shoot, Lekki" /></Field>
+        <ProposalFields value={f} onChange={setF} canEditRate={false} baseRate={0} hideQuote />
+        <Field label="Message to the crew" htmlFor="groupMessage"><textarea id="groupMessage" className={inputCls + ' min-h-20'} value={message} maxLength={2000} onChange={e => setMessage(e.target.value)} placeholder="What are you shooting, where, and what time is call?" /></Field>
+        {f.start && days > 0 && <p className="rounded-xl bg-lime-soft p-3 text-sm">Estimated total for the group: <strong>{naira(total)}</strong> <span className="text-muted">(rates plus 10% service fee)</span></p>}
+        <Button variant="dark" type="submit" disabled={busy || !f.start || !title.trim()} className="w-full">{busy ? 'Sending…' : <>Send {pros.length} requests <ArrowUpRight className="size-4" aria-hidden="true" /></>}</Button>
+        <p className="text-center text-[11px] leading-relaxed text-muted">Each person gets their own chat and replies, accepts and is paid separately. Nothing is charged until each one accepts. If someone declines, the rest still go ahead.</p>
       </form>
     </Modal>
   );

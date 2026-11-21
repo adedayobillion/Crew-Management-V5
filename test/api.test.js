@@ -169,3 +169,18 @@ test('admin: named account with 2FA, recovery codes, payout rules, audit', async
   assert.equal((await a.post('/api/admin/auth/logout', {}, csrf)).status, 200);
   assert.equal((await a.get('/api/admin/accounts')).status, 401);
 });
+
+test('group booking creates one linked request per crew member', async () => {
+  const crew2 = await register('Crew Two', 'crew'); await pool.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [crew2.id]);
+  const l2 = (await crew2.a.post('/api/crew-applications', { role: 'Sound', location: 'Lagos', bio: 'Boom', dailyRate: 30000 })).body.listing.id;
+  const d = tomorrow(40), body = { professionalIds: [listingId, l2], title: 'Brand film', startDate: d, endDate: d, message: 'Two day shoot' };
+  assert.equal((await client.a.post('/api/group-bookings', { ...body, professionalIds: [listingId] })).status, 400, 'needs 2+');
+  assert.equal((await client.a.post('/api/group-bookings', { ...body, title: '' })).status, 400);
+  const r = await client.a.post('/api/group-bookings', body);
+  assert.equal(r.status, 201, JSON.stringify(r.body)); assert.equal(r.body.bookings.length, 2);
+  assert.ok(r.body.bookings.every(b => b.group_ref === r.body.group_ref && b.group_title === 'Brand film' && b.status === 'awaiting_review'));
+  await pool.query('INSERT INTO availability_blocks (professional_id, start_date, end_date) VALUES ($1,$2,$2)', [l2, tomorrow(41)]);
+  const before = (await pool.query('SELECT COUNT(*)::int n FROM bookings')).rows[0].n;
+  assert.equal((await client.a.post('/api/group-bookings', { ...body, startDate: tomorrow(41), endDate: tomorrow(41) })).status, 409, 'one unavailable member rejects the group');
+  assert.equal((await pool.query('SELECT COUNT(*)::int n FROM bookings')).rows[0].n, before, 'nothing partially created');
+});
