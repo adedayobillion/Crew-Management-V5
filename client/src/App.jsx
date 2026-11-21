@@ -1,3 +1,4 @@
+import CrewListing from './CrewListing.jsx';
 import { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { AuthModal, BookingModal, JoinModal, LegalModal, ResetModal } from './modals.jsx';
@@ -173,6 +174,7 @@ function Shell() {
         <AnimatePresence mode="wait">
           {page === 'marketplace' ? (
             <div key="m">
+              {user && user.accountType === 'crew' && <section aria-label="Your crew listings" className="mx-auto w-full max-w-[1180px] px-4 pt-6 sm:px-6"><CrewListing toast={toast} /></section>}
               <Hero filters={filters} setFilters={setFilters} onJoin={openJoin} />
               <Discover pros={pros} loading={loading} filters={filters} setFilters={setFilters} saved={saved} onSave={toggleSave} onBook={openBooking} />
               <How /><Trust /><Banner onJoin={openJoin} />
