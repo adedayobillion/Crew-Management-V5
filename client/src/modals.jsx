@@ -189,12 +189,11 @@ export function LegalModal({ topic, setTopic, onClose }) {
   const policy = legalPolicies[topic] || legalPolicies.terms;
   return (
     <Modal open={!!topic} onClose={onClose} labelledBy="legalTitle" className="sm:max-w-[760px]">
-      <ModalHead tag="Platform policies · Draft for review" id="legalTitle" title={policy.title} onClose={onClose} />
+      <ModalHead tag="Platform policies" id="legalTitle" title={policy.title} onClose={onClose} />
       <SlidingTabs id="legalTabs" value={topic || 'terms'} onChange={setTopic} className="mb-4 overflow-x-auto" tabs={[{ value: 'terms', label: 'Terms' }, { value: 'privacy', label: 'Privacy' }, { value: 'cancellation', label: 'Cancellation' }, { value: 'crew', label: 'Crew & payouts' }]} />
       <AnimatePresence mode="wait">
         <motion.article key={topic} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }} className="legal-content" dangerouslySetInnerHTML={{ __html: policy.html }} />
       </AnimatePresence>
-      <p className="mt-3 border-t border-line pt-3 text-[11px] text-muted">These are starter policy templates for testing, not legal advice. Have a qualified lawyer review them for your operating location before public launch or taking payments.</p>
     </Modal>
   );
 }
