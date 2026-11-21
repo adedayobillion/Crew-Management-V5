@@ -69,3 +69,17 @@ Limitations remain: this uses one shared admin token, not named admin identities
 - Admins can now have named accounts (email + password + authenticator-app code, with one-time recovery codes). Sessions last 8 hours in an HttpOnly, SameSite=Strict cookie; changes also need an `x-requested-with` header. Wrong codes lock a sign-in attempt after 5 tries; sign-in attempts are rate limited.
 - The shared `CMA_ADMIN_TOKEN` still works so the first account can be created. Once everyone has an account, set `ADMIN_TOKEN_AUTH=disabled` to turn the shared token off.
 - Admin 2FA secrets are encrypted with `ADMIN_2FA_KEY` (or `ID_ENCRYPTION_KEY`). Losing that key means every admin must have 2FA reset.
+
+## Hardening pass (November 2026)
+
+Already in place: hashed session tokens, HttpOnly SameSite cookies, origin check on all writes, strict CSP, helmet defaults, bcrypt (cost 12) with constant-time login, per-IP rate limits, admin 2FA with sealed secrets, HMAC-verified payment webhooks with server-side amount checks, encrypted ID documents, role-scoped money fields, parameterised SQL throughout.
+
+Added in this pass:
+- JSON bodies limited to 128 KB; only the photo and ID upload routes accept up to 8 MB.
+- Per-account login throttle (8 failures per 15 minutes) in addition to the per-IP limiter.
+- Message rate limit (40 per minute per user) and a cap of 10 live chat connections per user.
+- `Cache-Control: no-store` on every API response; `Permissions-Policy` header; images restricted to same-origin, data and blob in the CSP.
+- Links in emails and payment return URLs come from `APP_URL`; a Host header is only used if it is a plain hostname, and production logs a warning when `APP_URL` is missing.
+- CI fails on high-severity production dependency advisories; Dependabot opens weekly update PRs.
+
+Known and accepted: sign-up reveals whether an email is already registered (needed for a clear error); the login throttle is per server process, so with several replicas the effective limit is multiplied (the per-IP limiter and bcrypt cost still apply). Not yet done: penetration test by a third party, automated secret scanning in CI, WAF/CDN in front of the app.

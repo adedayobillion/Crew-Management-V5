@@ -236,3 +236,14 @@ test('hourly and flat-fee listings: quantity, delivery date, calendar blocking',
   assert.equal(cal.status, 201); assert.equal(cal.body.booking.schedule_kind, 'calendar');
   assert.equal((await client.a.post('/api/group-bookings', { professionalIds: [lh.id, listingId], title: 'x', startDate: tomorrow(80), endDate: tomorrow(80) })).status, 400, 'hourly crew cannot join a group');
 });
+
+test('hardening: no-store API responses, small JSON bodies, per-account login throttle', async () => {
+  const h = await fetch(BASE + '/api/professionals');
+  assert.equal(h.headers.get('cache-control'), 'no-store'); assert.ok(h.headers.get('permissions-policy'));
+  assert.match(h.headers.get('content-security-policy') || '', /img-src 'self' data: blob:;/);
+  const big = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'a@b.co', password: 'x'.repeat(200000) }) });
+  assert.equal(big.status, 413, 'oversized JSON is refused on normal routes');
+  const email = `throttle${Date.now()}@test.dev`; let last;
+  for (let i = 0; i < 9; i++) last = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password: 'wrong-password-1' }) });
+  assert.equal(last.status, 429, 'the account is throttled after repeated failures');
+});

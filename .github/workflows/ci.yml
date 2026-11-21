@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - run: npm ci
+      - name: Dependency audit
+        run: npm audit --omit=dev --audit-level=high
       - name: Syntax check
         run: node --check server.js
       - name: Build client
