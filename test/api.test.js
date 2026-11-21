@@ -247,3 +247,26 @@ test('hardening: no-store API responses, small JSON bodies, per-account login th
   for (let i = 0; i < 9; i++) last = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password: 'wrong-password-1' }) });
   assert.equal(last.status, 429, 'the account is throttled after repeated failures');
 });
+
+test('admin disputes: audited chat review, support messages, resolution', async () => {
+  const ADM = { 'x-admin-token': ADMIN_TOKEN, 'content-type': 'application/json', 'x-requested-with': 'cma-admin' };
+  const call = (path, method = 'GET', body) => fetch(BASE + path, { method, headers: ADM, body: body ? JSON.stringify(body) : undefined }).then(async r => ({ status: r.status, body: await r.json().catch(() => ({})) }));
+  const pay = (await pool.query(`SELECT b.id FROM bookings b WHERE b.status = 'completed' AND b.payment_status = 'paid' ORDER BY b.id DESC LIMIT 1`)).rows[0];
+  assert.ok(pay, 'a paid, completed booking exists from the earlier test');
+  const d = (await pool.query(`INSERT INTO disputes (booking_id, raised_by, reason, status) VALUES ($1,'client','Crew delivered late and the work was incomplete','open') RETURNING id`, [pay.id])).rows[0];
+  await pool.query(`UPDATE bookings SET status = 'disputed' WHERE id = $1`, [pay.id]);
+  const list = await call('/api/admin/disputes'); assert.equal(list.status, 200); assert.ok(list.body.disputes.some(x => x.id === d.id));
+  assert.equal((await call(`/api/admin/disputes/${d.id}/open`, 'POST', { reason: 'short' })).status, 400, 'a real reason is required');
+  const opened = await call(`/api/admin/disputes/${d.id}/open`, 'POST', { reason: 'Reviewing the complaint about late delivery' });
+  assert.equal(opened.status, 200); assert.ok(Array.isArray(opened.body.messages) && opened.body.messages.length);
+  assert.ok((await pool.query(`SELECT 1 FROM admin_audit_log WHERE action = 'chat_viewed'`)).rows.length, 'chat view is audited');
+  assert.equal((await call(`/api/admin/disputes/${d.id}/messages`, 'POST', { text: 'We are looking into this and will decide within 24 hours.' })).status, 201);
+  const seen = (await client.a.get(`/api/bookings/${pay.id}/messages`)).body;
+  assert.ok(seen.some(m => m.sender_type === 'admin' && m.sender_name === 'Support team'), 'the client sees the support message');
+  assert.equal((await call(`/api/admin/disputes/${d.id}/resolve`, 'POST', { outcome: 'bogus', note: 'x'.repeat(20) })).status, 400);
+  const done = await call(`/api/admin/disputes/${d.id}/resolve`, 'POST', { outcome: 'refund_client', note: 'Refunding the client because the work was not delivered.' });
+  assert.equal(done.status, 200, JSON.stringify(done.body)); assert.ok(done.body.refund_reminder);
+  const row = (await pool.query('SELECT status, payment_status FROM bookings WHERE id = $1', [pay.id])).rows[0];
+  assert.deepEqual([row.status, row.payment_status], ['refunded', 'refunded']);
+  assert.equal((await call(`/api/admin/disputes/${d.id}/resolve`, 'POST', { outcome: 'dismiss', note: 'x'.repeat(20) })).status, 409, 'cannot resolve twice');
+});

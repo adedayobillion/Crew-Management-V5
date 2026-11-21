@@ -502,6 +502,9 @@ async function initDb() {
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS reason TEXT;
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'open';
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS resolution TEXT;
+      ALTER TABLE disputes ADD COLUMN IF NOT EXISTS outcome VARCHAR(20);
+      ALTER TABLE disputes ADD COLUMN IF NOT EXISTS resolved_by VARCHAR(80);
+      ALTER TABLE disputes ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP;
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
       ALTER TABLE payouts ADD COLUMN IF NOT EXISTS professional_id INT REFERENCES professionals(id);
       ALTER TABLE payouts ADD COLUMN IF NOT EXISTS booking_id INT REFERENCES bookings(id);
@@ -2169,6 +2172,90 @@ app.patch('/api/admin/id-documents/:id/review', adminGuard, wrap(async(req,res)=
     await audit(db,req,'identity_document_'+status,{id:doc.user_id},{documentId:doc.id,documentType:doc.document_type});
   });
   res.json({success:true});
+}));
+
+/* ---------------- admin: disputes, chat review and support messages ---------------- */
+// Admins can read a booking chat only through a dispute, with a written reason that goes into the audit log.
+const DISPUTE_SELECT = `SELECT d.id, d.status, d.reason, d.raised_by, d.created_at, d.outcome, d.resolution, d.resolved_by, d.resolved_at,
+    b.id AS booking_id, COALESCE(b.reference,'') AS reference, b.status AS booking_status, b.payment_status, b.client_name, b.client_email, b.client_total, b.crew_net,
+    b.start_date, b.end_date, p.name AS crew_name
+  FROM disputes d JOIN bookings b ON b.id = d.booking_id LEFT JOIN professionals p ON p.id = b.professional_id`;
+app.get('/api/admin/disputes', adminGuard, wrap(async (req, res) => {
+  const { rows } = await pool.query(DISPUTE_SELECT + ` ORDER BY (d.status = 'open') DESC, d.created_at DESC LIMIT 200`);
+  res.json({ disputes: rows.map(r => ({ ...r, reference: r.reference || refFor(r.booking_id) })) });
+}));
+async function loadDispute(db, id) {
+  const d = (await db.query(DISPUTE_SELECT + ' WHERE d.id = $1', [toInt(id)])).rows[0];
+  if (!d) fail(404, 'Dispute not found.');
+  return d;
+}
+const disputeBooking = (d) => ({ id: d.booking_id, reference: d.reference || refFor(d.booking_id) });
+app.post('/api/admin/disputes/:id/open', adminGuard, wrap(async (req, res) => {
+  const reason = str(req.body.reason, 300);
+  if (reason.length < 10) fail(400, 'Write a short reason (at least 10 characters) for opening this chat. It is saved in the audit log.');
+  const d = await loadDispute(pool, req.params.id);
+  const { rows } = await pool.query('SELECT * FROM messages WHERE booking_id = $1 ORDER BY created_at ASC', [d.booking_id]);
+  await audit(pool, req, 'chat_viewed', { id: null, name: d.client_name, email: d.client_email }, { reference: d.reference || refFor(d.booking_id), dispute_id: d.id, reason });
+  res.json({ dispute: { ...d, reference: d.reference || refFor(d.booking_id) }, messages: rows });
+}));
+async function bookingParties(db, bookingId) {
+  const b = (await db.query('SELECT * FROM bookings WHERE id = $1', [bookingId])).rows[0];
+  const crewIds = await crewUserIdsFor(db, b.professional_id);
+  return { b, ids: [b.user_id, crewIds[0]].filter(Boolean) };
+}
+async function postSupportMessage(db, req, d, text, kind) {
+  const { b, ids } = await bookingParties(db, d.booking_id);
+  const row = (await db.query(`INSERT INTO messages (booking_id,sender_type,sender_name,masked_content,sender_user_id,recipient_user_id,kind) VALUES ($1,'admin','Support team',$2,NULL,NULL,$3) RETURNING *`, [b.id, text, kind])).rows[0];
+  return { b, ids, row };
+}
+function notifySupport(b, ids, row, title) {
+  broadcastChat(b.id, row);
+  const ref = b.reference || refFor(b.id);
+  for (const uid of ids) {
+    emitMessageNotification(uid, { type: 'message', booking_id: b.id, reference: ref, sender_name: 'Support team', preview: row.masked_content, created_at: row.created_at });
+    emailUsers([uid], title + ' (' + ref + ')', ['Our support team posted an update on your booking ' + ref + ':', String(row.masked_content).slice(0, 600)], '/?inbox=' + b.id, 'sup' + row.id).catch(() => {});
+  }
+}
+app.post('/api/admin/disputes/:id/messages', adminGuard, wrap(async (req, res) => {
+  const text = str(req.body.text, 2000);
+  if (!text) fail(400, 'Write a message first.');
+  const d = await loadDispute(pool, req.params.id);
+  const out = await withTx(async db => { const r = await postSupportMessage(db, req, d, text, 'text'); await audit(db, req, 'support_message', { id: null, name: d.client_name, email: d.client_email }, { reference: d.reference || refFor(d.booking_id), dispute_id: d.id }); return r; });
+  notifySupport(out.b, out.ids, out.row, 'Message from our support team');
+  res.status(201).json({ success: true, message: out.row });
+}));
+const DISPUTE_OUTCOMES = {
+  refund_client: 'The client is refunded',
+  pay_crew: 'The crew member is paid',
+  dismiss: 'No change: the booking continues'
+};
+app.post('/api/admin/disputes/:id/resolve', adminGuard, wrap(async (req, res) => {
+  const outcome = String(req.body.outcome || '');
+  const note = str(req.body.note, 1000);
+  if (!DISPUTE_OUTCOMES[outcome]) fail(400, 'Choose an outcome.');
+  if (note.length < 10) fail(400, 'Write the decision for both sides (at least 10 characters).');
+  const d = await loadDispute(pool, req.params.id);
+  if (d.status !== 'open') fail(409, 'This dispute is already resolved.');
+  const out = await withTx(async db => {
+    await db.query('SELECT id FROM disputes WHERE id = $1 FOR UPDATE', [d.id]);
+    const cur = (await db.query('SELECT status FROM disputes WHERE id = $1', [d.id])).rows[0];
+    if (cur.status !== 'open') fail(409, 'This dispute is already resolved.');
+    const b = (await db.query('SELECT * FROM bookings WHERE id = $1 FOR UPDATE', [d.booking_id])).rows[0];
+    if (outcome === 'refund_client') {
+      await db.query(`UPDATE bookings SET status = 'refunded', payment_status = CASE WHEN payment_status = 'paid' THEN 'refunded' ELSE payment_status END WHERE id = $1`, [b.id]);
+      await db.query(`DELETE FROM availability_blocks WHERE id = (SELECT id FROM availability_blocks WHERE professional_id = $1 AND start_date = $2 AND end_date = $3 AND reason = 'confirmed booking' LIMIT 1)`, [b.professional_id, b.start_date, b.end_date]);
+    } else if (outcome === 'pay_crew') {
+      await db.query(`UPDATE bookings SET status = 'completed' WHERE id = $1`, [b.id]);
+    } else {
+      await db.query(`UPDATE bookings SET status = 'in_progress' WHERE id = $1 AND status = 'disputed'`, [b.id]);
+    }
+    await db.query(`UPDATE disputes SET status = 'resolved', outcome = $2, resolution = $3, resolved_by = $4, resolved_at = NOW() WHERE id = $1`, [d.id, outcome, note, req.adminName || 'admin']);
+    const r = await postSupportMessage(db, req, d, 'Support decision: ' + DISPUTE_OUTCOMES[outcome] + '. ' + note, 'text');
+    await audit(db, req, 'dispute_resolved', { id: null, name: d.client_name, email: d.client_email }, { reference: d.reference || refFor(d.booking_id), dispute_id: d.id, outcome, note });
+    return r;
+  });
+  notifySupport(out.b, out.ids, out.row, 'Decision on your dispute');
+  res.json({ success: true, refund_reminder: outcome === 'refund_client' && d.payment_status === 'paid' ? 'Now send the refund of the client total from your Bachs dashboard. The booking is marked refunded.' : null });
 }));
 
 app.get('/api/admin/audit-log', adminGuard, wrap(async (req, res) => {
