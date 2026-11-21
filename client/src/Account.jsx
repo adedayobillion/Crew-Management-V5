@@ -490,12 +490,12 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
       {open && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[90] flex items-stretch justify-center overflow-hidden bg-[#0b142280] backdrop-blur-sm sm:items-center sm:p-3" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
           <motion.section initial={{ y: 24, opacity: 0, scale: .98 }} animate={{ y: 0, opacity: 1, scale: 1 }} exit={{ y: 16, opacity: 0 }} className="flex h-[100dvh] max-h-[100dvh] w-full min-h-0 max-w-5xl flex-col overflow-hidden rounded-none bg-white shadow-2xl sm:h-[90dvh] sm:max-h-[90dvh] sm:rounded-2xl">
-            <header className="flex items-center justify-between border-b border-line px-4 py-3 sm:px-5">
+            <header className={'items-center justify-between border-b border-line px-4 py-3 sm:px-5 ' + (selected ? 'hidden md:flex' : 'flex')}>
               <div><Tagline>Account inbox</Tagline><h2 className="font-display text-xl font-extrabold">Messages</h2></div>
               <Button size="sm" variant="ghost" onClick={onClose}>Close</Button>
             </header>
-            <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden md:grid-rows-1 md:grid-cols-[300px_minmax(0,1fr)]">
-              <aside className="max-h-[28dvh] min-h-0 overflow-y-auto overscroll-contain border-b border-line [touch-action:pan-y] [-webkit-overflow-scrolling:touch] md:max-h-none md:border-b-0 md:border-r">
+            <div className="grid min-h-0 flex-1 grid-rows-1 overflow-hidden md:grid-cols-[300px_minmax(0,1fr)]">
+              <aside className={'min-h-0 overflow-y-auto overscroll-contain border-line [touch-action:pan-y] [-webkit-overflow-scrolling:touch] md:block md:border-r ' + (selected ? 'hidden' : 'block')}>
                 {!threads.length ? <p className="p-5 text-xs text-muted">No booking conversations yet.</p> : threads.map(thread => (
                   <button key={thread.id} type="button" onClick={() => openThread(thread)} className={'block w-full border-b border-line p-4 text-left transition hover:bg-[#f7f9f2] ' + (selected?.id === thread.id ? 'bg-[#f1f5e9]' : '')}>
                     <div className="flex items-center justify-between gap-2"><strong className="text-sm">{thread.my_role === 'client' ? (thread.professional_name || 'Crew member') : (thread.client_name || 'Client')}</strong>{Number(thread.unread_count) > 0 && <span className="rounded-full bg-lime px-2 py-0.5 text-[10px] font-extrabold">{thread.unread_count}</span>}</div>
@@ -504,9 +504,13 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                   </button>
                 ))}
               </aside>
-              <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+              <section className={'min-h-0 min-w-0 flex-1 flex-col overflow-hidden md:flex ' + (selected ? 'flex' : 'hidden')}>
                 {!selected ? <div className="grid flex-1 place-items-center p-6 text-sm text-muted">Choose a booking conversation.</div> : (
                   <>
+                    <div className="flex items-center justify-between border-b border-line bg-white px-2 py-1.5 md:hidden">
+                      <button type="button" onClick={() => setSelected(null)} className="rounded-lg px-2.5 py-2 text-sm font-extrabold text-ink active:bg-[#edf1f5]">← Messages</button>
+                      <button type="button" onClick={onClose} className="rounded-lg px-2.5 py-2 text-sm font-bold text-muted active:bg-[#edf1f5]">Close</button>
+                    </div>
                     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-line px-4 py-3">
                       <div><strong className="text-sm">{current.my_role === 'client' ? current.professional_name : current.client_name}</strong><span className="ml-2 text-[11px] text-muted">{current.reference}{current.group_title ? ' · Group: ' + current.group_title : ''}</span></div>
                       <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -553,7 +557,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                       </form>
                     )}
                     <p className="border-t border-line bg-[#fff8e6] px-3 py-1.5 text-[11px] text-[#6b4e07]">Beware of scams: never pay, send deposits or share bank details outside the app.</p>
-                    <form onSubmit={send} className="flex gap-2 p-3"><input className={inputCls + ' flex-1'} value={draft} onChange={e => setDraft(e.target.value)} maxLength={2000} placeholder="Write a message…" /><Button type="submit" disabled={busy || !draft.trim()}>{busy ? 'Sending…' : 'Send'}</Button></form>
+                    <form onSubmit={send} className="flex gap-2 border-t border-line bg-white p-3 pb-[max(12px,env(safe-area-inset-bottom))]"><input className={inputCls + ' flex-1'} value={draft} onChange={e => setDraft(e.target.value)} maxLength={2000} placeholder="Write a message…" /><Button type="submit" disabled={busy || !draft.trim()}>{busy ? 'Sending…' : 'Send'}</Button></form>
                   </>
                 )}
               </section>
