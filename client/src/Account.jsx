@@ -522,6 +522,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                     </div>
                     <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain bg-[#f7f9f6] p-4 [touch-action:pan-y] [-webkit-overflow-scrolling:touch]">
                       {messages.map(message => {
+                        if (message.sender_type === 'admin') return <div key={message.id} className="mx-auto w-full max-w-[92%] rounded-2xl border border-lime-deep/40 bg-lime-soft p-3 text-sm"><span className="mb-1 flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-[.08em] text-[#4d6b14]">Support team · official</span><p className="whitespace-pre-wrap break-words text-ink">{message.masked_content}</p></div>;
                         if (message.kind === 'system') return <p key={message.id} className="mx-auto w-fit max-w-[90%] rounded-full bg-[#e8ecef] px-3 py-1 text-center text-[11px] text-[#445468]">{message.masked_content}</p>;
                         if (message.kind === 'request' || message.kind === 'offer') return <div key={message.id} className="flex flex-col"><span className={'mb-0.5 text-[10px] text-muted ' + (message.offer?.proposed_by === current.my_role ? 'text-right' : '')}>{message.offer?.proposed_by === current.my_role ? 'You' : message.sender_name}</span><OfferCard message={message} thread={current} busy={busy} onRespond={respondToOffer} /></div>;
                         const mine = message.sender_user_id ? Number(message.sender_user_id) === Number(user?.id) : (message.sender_type === selected.my_role && message.sender_name === user?.name);
@@ -556,7 +557,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                         <Button type="submit" disabled={busy || !propose.start}>{busy ? 'Sending…' : 'Send proposal'}</Button>
                       </form>
                     )}
-                    <p className="border-t border-line bg-[#fff8e6] px-3 py-1.5 text-[11px] text-[#6b4e07]">Beware of scams: never pay, send deposits or share bank details outside the app.</p>
+                    <p className="border-t border-line bg-[#fff8e6] px-3 py-1.5 text-[11px] text-[#6b4e07]">Beware of scams: never pay, send deposits or share bank details outside the app. Support can review this chat if a problem is reported.</p>
                     <form onSubmit={send} className="flex gap-2 border-t border-line bg-white p-3 pb-[max(12px,env(safe-area-inset-bottom))]"><input className={inputCls + ' flex-1'} value={draft} onChange={e => setDraft(e.target.value)} maxLength={2000} placeholder="Write a message…" /><Button type="submit" disabled={busy || !draft.trim()}>{busy ? 'Sending…' : 'Send'}</Button></form>
                   </>
                 )}

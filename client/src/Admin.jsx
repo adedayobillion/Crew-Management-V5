@@ -19,13 +19,79 @@ function Table({ headers, rows }) {
   );
 }
 
+
+function DisputesPanel({ disputes, reload, api, say }) {
+  const btn = 'rounded-[9px] bg-ink px-3 py-2 text-xs font-bold text-white disabled:opacity-50';
+  const [open, setOpen] = useState(null); // { dispute, messages }
+  const [asking, setAsking] = useState(null); // dispute awaiting a reason
+  const [reason, setReason] = useState(''); const [text, setText] = useState(''); const [outcome, setOutcome] = useState('dismiss'); const [note, setNote] = useState(''); const [busy, setBusy] = useState(false);
+  const money = n => '₦' + Number(n || 0).toLocaleString('en-NG');
+  async function openChat() {
+    setBusy(true);
+    try { setOpen(await api(`/api/admin/disputes/${asking.id}/open`, { method: 'POST', body: JSON.stringify({ reason }) })); setAsking(null); setReason(''); } catch (e) { say(e.message, true); } finally { setBusy(false); }
+  }
+  async function refreshChat() { const r = await api(`/api/admin/disputes/${open.dispute.id}/open`, { method: 'POST', body: JSON.stringify({ reason: 'Refreshing an open dispute chat' }) }); setOpen(r); }
+  async function send(e) {
+    e.preventDefault(); if (!text.trim()) return; setBusy(true);
+    try { await api(`/api/admin/disputes/${open.dispute.id}/messages`, { method: 'POST', body: JSON.stringify({ text }) }); setText(''); await refreshChat(); say('Message sent to both parties.'); } catch (e2) { say(e2.message, true); } finally { setBusy(false); }
+  }
+  async function resolve(e) {
+    e.preventDefault();
+    if (!confirm('Resolve this dispute and tell both parties your decision? This cannot be undone.')) return;
+    setBusy(true);
+    try { const r = await api(`/api/admin/disputes/${open.dispute.id}/resolve`, { method: 'POST', body: JSON.stringify({ outcome, note }) }); say(r.refund_reminder || 'Dispute resolved.'); setOpen(null); setNote(''); await reload(); } catch (e2) { say(e2.message, true); } finally { setBusy(false); }
+  }
+  if (open) {
+    const d = open.dispute, isOpen = d.status === 'open';
+    return (<>
+      <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Dispute {d.reference}</h2><button type="button" className={btn} onClick={() => { setOpen(null); reload(); }}>Back to list</button></div>
+      <div className={cn(card, 'mt-3 grid gap-1 text-sm')}>
+        <p><strong>{d.client_name}</strong> booked <strong>{d.crew_name}</strong> · {String(d.start_date).slice(0, 10)}{String(d.end_date).slice(0, 10) !== String(d.start_date).slice(0, 10) ? ' to ' + String(d.end_date).slice(0, 10) : ''}</p>
+        <p>Client paid: <strong>{money(d.client_total)}</strong> · Crew payout: <strong>{money(d.crew_net)}</strong> · Payment: <strong>{d.payment_status}</strong> · Booking: <strong>{d.booking_status}</strong></p>
+        <p className="text-muted">Reported by the {d.raised_by}: “{d.reason}”</p>
+        {!isOpen && <p className="mt-1 rounded-lg bg-[#f1f5f0] p-2">Resolved by {d.resolved_by}: {d.resolution}</p>}
+      </div>
+      <div className={cn(card, 'mt-3 max-h-[420px] space-y-2 overflow-y-auto bg-[#f7f9f6]')}>
+        {open.messages.map(m => m.sender_type === 'admin'
+          ? <div key={m.id} className="rounded-xl border border-lime-deep/40 bg-lime-soft p-2.5 text-sm"><b className="text-[11px] uppercase text-[#4d6b14]">Support team</b><p className="whitespace-pre-wrap break-words">{m.masked_content}</p></div>
+          : m.kind === 'system' ? <p key={m.id} className="text-center text-[11px] text-muted">{m.masked_content}</p>
+          : <div key={m.id} className="text-sm"><span className="text-[11px] text-muted">{m.sender_name} ({m.sender_type}) · {new Date(m.created_at).toLocaleString('en-NG')}</span><p className="whitespace-pre-wrap break-words rounded-xl bg-white p-2.5">{m.masked_content}{m.offer ? ' [offer: ' + money(m.offer.client_total) + ' client / ' + money(m.offer.crew_net) + ' crew]' : ''}</p></div>)}
+      </div>
+      {isOpen && <>
+        <form onSubmit={send} className="mt-3 grid gap-2"><textarea className={inputCls} rows={3} maxLength={2000} value={text} onChange={e => setText(e.target.value)} placeholder="Write to both parties as the Support team…" /><div><button className={btn} type="submit" disabled={busy || !text.trim()}>Send to both parties</button></div></form>
+        <form onSubmit={resolve} className={cn(card, 'mt-3 grid gap-2')}>
+          <strong className="text-sm">Resolve this dispute</strong>
+          <select className={inputCls} value={outcome} onChange={e => setOutcome(e.target.value)}>
+            <option value="dismiss">No change: the booking continues</option>
+            <option value="pay_crew">Pay the crew member (mark completed)</option>
+            <option value="refund_client">Refund the client (mark refunded)</option>
+          </select>
+          <textarea className={inputCls} rows={3} maxLength={1000} required value={note} onChange={e => setNote(e.target.value)} placeholder="Your decision, shown to both parties" />
+          <div><button className={btn} type="submit" disabled={busy || note.trim().length < 10}>Resolve and notify both</button></div>
+        </form>
+      </>}
+    </>);
+  }
+  return (<>
+    <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Disputes</h2><button type="button" className={btn} onClick={reload}>Refresh</button></div>
+    <p className="mt-1 text-xs text-muted">Chats open only through a dispute, with a reason that is saved in the admin activity log.</p>
+    <div className={cn(card, 'mt-3 p-0')}>{disputes && <Table headers={['Reference', 'Client', 'Crew', 'Reported by', 'Reason', 'Status', 'Action']} rows={disputes.map(d => [d.reference, d.client_name, d.crew_name, d.raised_by, String(d.reason || '').slice(0, 60), d.status, <button key={d.id} type="button" className={btn} onClick={() => setAsking(d)}>{d.status === 'open' ? 'Review chat' : 'View'}</button>])} />}{disputes && !disputes.length && <p className="p-4 text-sm text-muted">No disputes right now.</p>}</div>
+    {asking && (
+      <div className={cn(card, 'mt-3 grid gap-2')}>
+        <strong className="text-sm">Why are you opening {asking.reference}?</strong>
+        <input className={inputCls} value={reason} maxLength={300} onChange={e => setReason(e.target.value)} placeholder="e.g. Client reported crew did not deliver; reviewing the agreement" />
+        <div className="flex gap-2"><button type="button" className={btn} disabled={busy || reason.trim().length < 10} onClick={openChat}>Open chat</button><button type="button" className={btn} onClick={() => { setAsking(null); setReason(''); }}>Cancel</button></div>
+      </div>)}
+  </>);
+}
+
 export default function Admin() {
   const [token, setToken] = useState(''); const [authed, setAuthed] = useState(false);
   const [tokenInput, setTokenInput] = useState(''); const [loginErr, setLoginErr] = useState('');
   const [tab, setTab] = useState('accounts'); const [msg, setMsg] = useState({ text: '', err: false });
   const [stats, setStats] = useState(null); const [users, setUsers] = useState(null);
   const [filters, setFilters] = useState({ status: 'all', flag: 'all', q: '' });
-  const [audit, setAudit] = useState(null); const [bookings, setBookings] = useState(null); const [apps, setApps] = useState(null); const [listings, setListings] = useState(null); const [idDocuments, setIdDocuments] = useState(null);
+  const [disputes, setDisputes] = useState(null); const [audit, setAudit] = useState(null); const [bookings, setBookings] = useState(null); const [apps, setApps] = useState(null); const [listings, setListings] = useState(null); const [idDocuments, setIdDocuments] = useState(null);
   const [notes, setNotes] = useState({});
   const [payouts, setPayouts] = useState(null); const [pros, setPros] = useState(null); const [admins, setAdmins] = useState(null);
   const [adminName, setAdminName] = useState(''); const [cfg, setCfg] = useState({ accounts: false, tokenLogin: true });
@@ -47,6 +113,7 @@ export default function Admin() {
   const loadOverview = async (t) => { const d = await api('/api/admin/overview', {}, t); setStats(d.stats); };
   const loadUsers = async (t, f = filters) => { try { const d = await api('/api/admin/users?' + new URLSearchParams({ status: f.status, filter: f.flag, q: f.q.trim() }), {}, t); setUsers(d.users); setNotes(Object.fromEntries(d.users.map(u => [u.id, u.admin_notes || '']))); } catch (e) { say(e.message, true); } };
   const loadAudit = async () => { try { setAudit((await api('/api/admin/audit-log')).events); } catch (e) { say(e.message, true); } };
+  const loadDisputes = async () => { try { setDisputes((await api('/api/admin/disputes')).disputes); } catch (e) { say(e.message, true); } };
   const loadBookings = async () => { try { setBookings((await api('/api/admin/bookings')).bookings); } catch (e) { say(e.message, true); } };
   const loadApps = async () => { try { setApps((await api('/api/admin/applications')).applications); } catch (e) { say(e.message, true); } };
   const loadListings = async () => { try { setListings((await api('/api/admin/listings')).listings); } catch (e) { say(e.message, true); } };
@@ -127,7 +194,7 @@ export default function Admin() {
   }
   async function finishLogin() { setRecovery(null); setAuthed(true); setCreds({ email: '', password: '', code: '' }); setStep('creds'); setSetup(null); await Promise.all([loadOverview(''), loadUsers('')]); }
   async function lock() { if (!token) await fetch('/api/admin/auth/logout', { method: 'POST', credentials: 'same-origin', headers: { 'x-requested-with': 'cma-admin' } }).catch(() => {}); setToken(''); setTokenInput(''); setAdminName(''); setAuthed(false); setStats(null); setUsers(null); }
-  useEffect(() => { if (!authed) return; if (tab === 'audit') loadAudit(); if (tab === 'bookings') loadBookings(); if (tab === 'applications') loadApps(); if (tab === 'listings') loadListings(); if (tab === 'identity') loadIdDocuments(); if (tab === 'payouts') loadPayouts(); if (tab === 'professionals') loadPros(); if (tab === 'admins') loadAdmins(); }, [tab, authed]);
+  useEffect(() => { if (!authed) return; if (tab === 'audit') loadAudit(); if (tab === 'bookings') loadBookings(); if (tab === 'disputes') loadDisputes(); if (tab === 'applications') loadApps(); if (tab === 'listings') loadListings(); if (tab === 'identity') loadIdDocuments(); if (tab === 'payouts') loadPayouts(); if (tab === 'professionals') loadPros(); if (tab === 'admins') loadAdmins(); }, [tab, authed]);
 
   const labels = { approve: 'approve this account', reject: 'reject this account', verify: 'mark this account verified', unverify: 'remove this verification', flag_suspicious: 'flag this account for suspicious activity', clear_suspicious: 'clear this suspicious-activity flag', suspend: 'suspend this account and revoke its active sessions', reactivate: 'reactivate this account' };
   async function act(id, action) {
@@ -212,7 +279,7 @@ export default function Admin() {
                 ))}
               </div>
             )}
-            <SlidingTabs id="adminTabs" value={tab} onChange={setTab} className="my-4 w-fit max-w-full overflow-x-auto" tabs={[{ value: 'accounts', label: 'Accounts' }, { value: 'audit', label: 'Admin activity log' }, { value: 'bookings', label: 'Bookings' }, { value: 'applications', label: 'Crew applications' }, { value: 'listings', label: 'Marketplace listings' }, { value: 'identity', label: 'ID verification' }, { value: 'payouts', label: 'Payouts' }, { value: 'professionals', label: 'Verified crew' }, { value: 'admins', label: 'Admins' }]} />
+            <SlidingTabs id="adminTabs" value={tab} onChange={setTab} className="my-4 w-fit max-w-full overflow-x-auto" tabs={[{ value: 'accounts', label: 'Accounts' }, { value: 'audit', label: 'Admin activity log' }, { value: 'disputes', label: 'Disputes' }, { value: 'bookings', label: 'Bookings' }, { value: 'applications', label: 'Crew applications' }, { value: 'listings', label: 'Marketplace listings' }, { value: 'identity', label: 'ID verification' }, { value: 'payouts', label: 'Payouts' }, { value: 'professionals', label: 'Verified crew' }, { value: 'admins', label: 'Admins' }]} />
             <AnimatePresence mode="wait">
               <motion.section key={tab} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
                 {tab === 'accounts' && (<>
@@ -252,6 +319,7 @@ export default function Admin() {
                   <p className="my-2 text-muted">Records account approval, verification, risk flag, suspension, and note changes.</p>
                   <div className={cn(card, 'p-0')}>{audit && <Table headers={['Time', 'Action', 'Account', 'Email', 'IP address']} rows={audit.map(e => [date(e.created_at), e.action + (e.details?.reference ? ' ' + e.details.reference : '') + (e.details?.status ? ' → ' + e.details.status : ''), e.target_name || '#' + e.target_user_id, e.target_email || '', e.ip_address || '—'])} />}</div>
                 </>)}
+                {tab === 'disputes' && <DisputesPanel disputes={disputes} reload={loadDisputes} api={api} say={say} />}
                 {tab === 'bookings' && (<>
                   <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Booking requests</h2><Act onClick={loadBookings}>Refresh</Act></div>
                   <div className={cn(card, 'mt-3 p-0')}>{bookings && <Table headers={['Reference', 'Client', 'Crew', 'Project', 'Dates', 'Total', 'Status', 'Payment', 'Overtime agreed', 'Actions']} rows={bookings.map(b => [b.reference, <>{b.client_name}<br />{b.client_email}</>, <>{b.professional_name}<br />{b.professional_role}</>, b.project_type, String(b.start_date).slice(0, 10) + ' – ' + String(b.end_date).slice(0, 10), '₦' + Number(b.client_total).toLocaleString(), b.status, b.payment_status, b.overtime_agreed ? 'Yes' : 'No', <span className="flex gap-1.5"><Act onClick={() => bookingStatus(b.reference)}>Set status</Act><Act cls={soft} onClick={() => bookingOvertime(b.reference, !b.overtime_agreed)}>{b.overtime_agreed ? 'Unmark overtime' : 'Mark overtime agreed'}</Act></span>])} />}</div>
