@@ -55,9 +55,13 @@ pool.on('error', err => console.error('Idle database client error:', err.message
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 
-app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], baseUri: ["'self'"], fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'], styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'], scriptSrc: ["'self'"], scriptSrcAttr: ["'none'"], imgSrc: ["'self'", 'data:', 'https:'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], formAction: ["'self'"] } } }));
+app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], baseUri: ["'self'"], fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'], styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'], scriptSrc: ["'self'"], scriptSrcAttr: ["'none'"], imgSrc: ["'self'", 'data:', 'blob:'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], formAction: ["'self'"] } } }));
 // rawBody is kept so payment-webhook signatures can be verified against the exact bytes received
-app.use(express.json({ limit: '8mb', type: 'application/json', verify: (req, res, buf) => { req.rawBody = buf; } }));
+// Small bodies everywhere; only the upload routes (base64 photos and ID documents) may be large.
+const jsonVerify = (req, res, buf) => { req.rawBody = buf; };
+const jsonSmall = express.json({ limit: '128kb', type: 'application/json', verify: jsonVerify });
+const jsonLarge = express.json({ limit: '8mb', type: 'application/json', verify: jsonVerify });
+app.use((req, res, next) => (/^\/api\/(profile\/ids|crew\/photo|crew\/listings\/\d+\/photo|professionals\/\d+\/photo)$/.test(req.path) ? jsonLarge : jsonSmall)(req, res, next));
 app.use((req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS' && req.get('origin')) {
     const origin = req.get('origin'); const host = req.get('host');
@@ -65,6 +69,8 @@ app.use((req, res, next) => {
   }
   next();
 });
+app.use((req, res, next) => { res.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()'); next(); });
+app.use('/api/', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); }); // personal data is never cached by browsers or proxies
 app.use('/api/', rateLimit({ windowMs: 15 * 60 * 1000, limit: 300, standardHeaders: 'draft-7', legacyHeaders: false }));
 app.use(express.static(path.join(__dirname, 'dist'), { dotfiles: 'ignore', index: false }));
 
@@ -753,6 +759,13 @@ async function emailUsers(userIds, subject, lines, path, key) {
   } catch (e) { console.warn('emailUsers:', e.message); }
 }
 const appBase = () => APP_URL || 'http://localhost:' + PORT;
+// Never build links from an attacker-controlled Host header: use APP_URL, or a strictly validated host outside production.
+function baseUrl(req) {
+  if (APP_URL) return APP_URL;
+  const host = String(req.get('host') || '');
+  return /^[a-z0-9.-]+(:\d{1,5})?$/i.test(host) ? req.protocol + '://' + host : appBase();
+}
+if (process.env.NODE_ENV === 'production' && !APP_URL) console.warn('SECURITY: APP_URL is not set. Set it to your public https address so email and payment links cannot be spoofed.');
 const chatEmailLast = new Map(); // booking:user -> timestamp, so a busy chat does not flood an inbox
 async function emailNewMessage(recipientId, b, senderName, preview) {
   if (!EMAIL_ENABLED || !recipientId) return;
@@ -913,13 +926,20 @@ app.post('/api/auth/register', authLimiter, wrap(async (req, res) => {
   res.status(201).json({ success: true, user: publicUser(user) });
 }));
 
+// Per-account throttle on top of the per-IP limiter, so one account cannot be guessed at from many addresses.
+const loginFails = new Map();
+const LOGIN_MAX = 8, LOGIN_WINDOW = 15 * 60 * 1000;
+function loginBlocked(email) { const f = loginFails.get(email); if (!f) return false; if (f.until < Date.now()) { loginFails.delete(email); return false; } return f.n >= LOGIN_MAX; }
+function loginFailed(email) { const f = loginFails.get(email); if (!f || f.until < Date.now()) loginFails.set(email, { n: 1, until: Date.now() + LOGIN_WINDOW }); else f.n++; if (loginFails.size > 50000) loginFails.clear(); }
 app.post('/api/auth/login', authLimiter, wrap(async (req, res) => {
   const email = str(req.body.email, 254).toLowerCase();
+  if (loginBlocked(email)) fail(429, 'Too many failed attempts for this account. Wait 15 minutes or reset your password.');
   const password = String(req.body.password || '').slice(0, 200);
   const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
   const u = rows[0];
   const ok = await bcrypt.compare(password, u ? u.password_hash : DUMMY_HASH);
-  if (!u || !ok) fail(401, 'Incorrect email or password.');
+  if (!u || !ok) { loginFailed(email); fail(401, 'Incorrect email or password.'); }
+  loginFails.delete(email);
   if (u.is_suspended || u.account_status === 'rejected') fail(403, 'This account is not active. Please contact support.');
   await startSession(res, u.id);
   res.json({ success: true, user: publicUser(u) });
@@ -1618,7 +1638,7 @@ app.post('/api/payments/initialize', requireUser, requireVerifiedEmail, wrap(asy
   const open = (await pool.query(`SELECT * FROM payments WHERE booking_id = $1 AND booking_ids IS NULL AND status = 'pending' AND checkout_url IS NOT NULL AND amount = $2 AND created_at > NOW() - INTERVAL '25 minutes' ORDER BY id DESC LIMIT 1`, [b.id, amount])).rows[0];
   if (open) return res.json({ success: true, reference: open.gateway_reference, amount, checkout_url: open.checkout_url });
   const reference = `TXN-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-  const base = APP_URL || (req.protocol + '://' + req.get('host'));
+  const base = baseUrl(req);
   const ins = await pool.query(`INSERT INTO payments (booking_id, gateway, gateway_reference, amount, currency, status) VALUES ($1,'bachs',$2,$3,'NGN','pending') RETURNING id`, [b.id, reference, amount]);
   try {
     const session = await bachsFetch('POST', '/v1/checkout-sessions', {
@@ -1653,7 +1673,7 @@ app.post('/api/payments/initialize-group', requireUser, requireVerifiedEmail, wr
   const open = (await pool.query(`SELECT * FROM payments WHERE booking_ids = $1::int[] AND status = 'pending' AND checkout_url IS NOT NULL AND amount = $2 AND created_at > NOW() - INTERVAL '25 minutes' ORDER BY id DESC LIMIT 1`, [ids, amount])).rows[0];
   if (open) return res.json({ success: true, reference: open.gateway_reference, amount, count: ids.length, checkout_url: open.checkout_url });
   const reference = `TXN-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-  const base = APP_URL || (req.protocol + '://' + req.get('host'));
+  const base = baseUrl(req);
   const ins = await pool.query(`INSERT INTO payments (booking_id, booking_ids, gateway, gateway_reference, amount, currency, status) VALUES ($1,$2,'bachs',$3,$4,'NGN','pending') RETURNING id`, [ids[0], ids, reference, amount]);
   try {
     const session = await bachsFetch('POST', '/v1/checkout-sessions', {
@@ -1826,13 +1846,19 @@ app.get('/api/bookings/:id/messages/stream', requireUser, wrap(async (req, res) 
   res.flushHeaders();
   res.write('retry: 3000\n\n');
   if (!chatSubs.has(b.id)) chatSubs.set(b.id, new Set());
+  if ((sseCount.get(req.user.id) || 0) >= 10) { chatSubs.get(b.id).size || chatSubs.delete(b.id); return res.status(429).end(); }
+  sseCount.set(req.user.id, (sseCount.get(req.user.id) || 0) + 1);
   res.cmaRole = roleOf(req, b);
   chatSubs.get(b.id).add(res);
   const ping = setInterval(() => res.write(': ping\n\n'), 25000);
-  req.on('close', () => { clearInterval(ping); const set = chatSubs.get(b.id); if (set) { set.delete(res); if (!set.size) chatSubs.delete(b.id); } });
+  req.on('close', () => { sseCount.set(req.user.id, Math.max(0, (sseCount.get(req.user.id) || 1) - 1)); clearInterval(ping); const set = chatSubs.get(b.id); if (set) { set.delete(res); if (!set.size) chatSubs.delete(b.id); } });
 }));
 
+const msgRate = new Map(); // user id -> { n, reset }
+function msgAllowed(uid) { const now = Date.now(); const r = msgRate.get(uid); if (!r || r.reset < now) { msgRate.set(uid, { n: 1, reset: now + 60000 }); return true; } if (msgRate.size > 20000) msgRate.clear(); return ++r.n <= 40; }
+const sseCount = new Map();
 app.post('/api/bookings/:id/messages', requireUser, wrap(async (req, res) => {
+  if (!msgAllowed(req.user.id)) fail(429, 'You are sending messages too quickly. Please wait a moment.');
   const b = await getAccessibleBooking(pool, req, req.params.id);
   const content = str(req.body.content, 2000);
   if (!content) fail(400, 'Message cannot be empty.');
@@ -2292,7 +2318,7 @@ app.get('*', (req, res, next) => {
   try {
     if (!indexTemplate) indexTemplate = require('fs').readFileSync(path.join(__dirname, 'dist', 'index.html'), 'utf8');
   } catch (e) { return next(e); }
-  const origin = APP_URL || (req.protocol + '://' + req.get('host'));
+  const origin = baseUrl(req);
   res.type('html').send(indexTemplate.split('__APP_URL__').join(String(origin).replace(/[^\w:./-]/g, '')));
 });
 
