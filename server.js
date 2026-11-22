@@ -1834,14 +1834,14 @@ app.get('/api/inbox',requireUser,wrap(async(req,res)=>{
 app.post('/api/inbox/:bookingId/read',requireUser,wrap(async(req,res)=>{
   const booking=await getAccessibleBooking(pool,req,req.params.bookingId);
   const ownType=ownsBooking(req.user,booking)?'client':'crew';
-  await pool.query("INSERT INTO message_reads(message_id,user_id) SELECT m.id,$1 FROM messages m WHERE m.booking_id=$2 AND ((m.sender_user_id IS NOT NULL AND m.sender_user_id<>$1) OR (m.sender_user_id IS NULL AND m.sender_type<>$3)) ON CONFLICT(message_id,user_id) DO NOTHING",
-    [req.user.id,booking.id,ownType]);
+  await pool.query("INSERT INTO message_reads(message_id,user_id) SELECT m.id,$1 FROM messages m WHERE m.booking_id=$2 AND ((m.sender_user_id IS NOT NULL AND m.sender_user_id<>$1) OR (m.sender_user_id IS NULL AND m.sender_type<>$3)) ON CONFLICT(message_id,user_id) DO NOTHING RETURNING message_id",
+    [req.user.id,booking.id,ownType]).then(r=>{ if(r.rows.length) broadcastChat(booking.id,{_read:true,reader:req.user.id,ids:r.rows.map(x=>Number(x.message_id))}); });
   res.json({success:true});
 }));
 
 app.get('/api/bookings/:id/messages', requireUser, wrap(async (req, res) => {
   const b = await getAccessibleBooking(pool, req, req.params.id);
-  const { rows } = await pool.query('SELECT * FROM messages WHERE booking_id = $1 ORDER BY created_at ASC', [b.id]);
+  const { rows } = await pool.query('SELECT m.*, (m.sender_user_id IS NOT NULL AND EXISTS(SELECT 1 FROM message_reads mr WHERE mr.message_id = m.id AND mr.user_id <> m.sender_user_id)) AS read_by_other FROM messages m WHERE m.booking_id = $1 ORDER BY m.created_at ASC', [b.id]);
   res.json(scrubMoney(rows, roleOf(req, b)));
 }));
 

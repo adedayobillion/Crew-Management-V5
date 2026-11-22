@@ -246,6 +246,8 @@ const OPEN_STATES = ['awaiting_review', 'pending', 'counter_pending', 'confirmed
 const day = d => String(d).slice(0, 10);
 const statusStyle = { pending: 'bg-[#fff1d7] text-[#8b5c09]', accepted: 'bg-[#e3f4d3] text-[#3f6b12]', declined: 'bg-[#fde4e4] text-[#9b2c2c]', superseded: 'bg-[#eef1f4] text-[#64748b]' };
 
+const Receipt = ({ seen }) => <span className={'mt-0.5 block text-[10px] font-bold ' + (seen ? 'text-[#2f7d4f]' : 'text-muted')} aria-label={seen ? 'Seen' : 'Sent'}>{seen ? '✓✓ Seen' : '✓ Sent'}</span>;
+
 function ActionBar({ thread, busy, panel, setPanel, onComplete, onInvoice, onPay, groupDue, onPayGroup }) {
   const role = thread.my_role, st = thread.status, paid = thread.payment_status === 'paid';
   const started = day(thread.start_date) <= new Date(Date.now() + 3600000).toISOString().slice(0, 10);
@@ -388,6 +390,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
     stream.onmessage = event => {
       try {
         const message = JSON.parse(event.data);
+        if (message._read) { setMessages(list => list.map(m => message.ids.includes(Number(m.id)) && Number(m.sender_user_id) !== Number(message.reader) ? { ...m, read_by_other: true } : m)); return; }
         setMessages(list => list.some(m => Number(m.id) === Number(message.id)) ? list.map(m => Number(m.id) === Number(message.id) ? message : m) : [...list, message]);
         markRead(selected.id);
         loadThreads();
@@ -524,9 +527,9 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                       {messages.map(message => {
                         if (message.sender_type === 'admin') return <div key={message.id} className="mx-auto w-full max-w-[92%] rounded-2xl border border-lime-deep/40 bg-lime-soft p-3 text-sm"><span className="mb-1 flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-[.08em] text-[#4d6b14]">Support team · official</span><p className="whitespace-pre-wrap break-words text-ink">{message.masked_content}</p></div>;
                         if (message.kind === 'system') return <p key={message.id} className="mx-auto w-fit max-w-[90%] rounded-full bg-[#e8ecef] px-3 py-1 text-center text-[11px] text-[#445468]">{message.masked_content}</p>;
-                        if (message.kind === 'request' || message.kind === 'offer') return <div key={message.id} className="flex flex-col"><span className={'mb-0.5 text-[10px] text-muted ' + (message.offer?.proposed_by === current.my_role ? 'text-right' : '')}>{message.offer?.proposed_by === current.my_role ? 'You' : message.sender_name}</span><OfferCard message={message} thread={current} busy={busy} onRespond={respondToOffer} /></div>;
+                        if (message.kind === 'request' || message.kind === 'offer') return <div key={message.id} className="flex flex-col"><span className={'mb-0.5 text-[10px] text-muted ' + (message.offer?.proposed_by === current.my_role ? 'text-right' : '')}>{message.offer?.proposed_by === current.my_role ? 'You' : message.sender_name}</span><OfferCard message={message} thread={current} busy={busy} onRespond={respondToOffer} />{message.offer?.proposed_by === current.my_role && <div className="text-right"><Receipt seen={message.read_by_other} /></div>}</div>;
                         const mine = message.sender_user_id ? Number(message.sender_user_id) === Number(user?.id) : (message.sender_type === selected.my_role && message.sender_name === user?.name);
-                        return <div key={message.id} className={'flex flex-col ' + (mine ? 'items-end' : 'items-start')}><span className="mb-0.5 text-[10px] text-muted">{mine ? 'You' : message.sender_name}</span><p className={'max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-sm ' + (mine ? 'bg-ink text-white' : 'border border-line bg-white')}>{message.masked_content}</p></div>;
+                        return <div key={message.id} className={'flex flex-col ' + (mine ? 'items-end' : 'items-start')}><span className="mb-0.5 text-[10px] text-muted">{mine ? 'You' : message.sender_name}</span><p className={'max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-sm ' + (mine ? 'bg-ink text-white' : 'border border-line bg-white')}>{message.masked_content}</p>{mine && <Receipt seen={message.read_by_other} />}</div>;
                       })}
                       {!messages.length && <p className="p-4 text-center text-xs text-muted">No messages yet. Start the conversation.</p>}
                     </div>

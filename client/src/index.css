@@ -55,3 +55,10 @@ button, a, select { cursor: pointer; }
 }
 .no-scrollbar { scrollbar-width: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Phones: 16px fields stop iOS from zooming the page on focus (the main cause of the screen shifting out of frame). */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { overscroll-behavior-x: none; touch-action: manipulation; }
+@media (max-width: 767px) {
+  input, select, textarea { font-size: 16px !important; }
+}
