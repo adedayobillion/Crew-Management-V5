@@ -102,7 +102,7 @@ export function ProposalFields({ value, onChange, canEditRate, baseRate, hideQuo
       {items.map(([k, l]) => <button key={k} type="button" aria-pressed={cur === k} onClick={() => set({ [key]: k })} className={'rounded-full px-3.5 py-1.5 transition ' + (cur === k ? 'bg-ink text-white' : 'text-[#566274]')}>{l}</button>)}
     </div>
   );
-  const rateLabel = { day: 'Daily rate (₦)', hour: 'Hourly rate (₦)', project: 'Project fee (₦)' }[rateUnit];
+  const rateLabel = { day: 'Agreed daily rate (₦)', hour: 'Agreed hourly rate (₦)', project: 'Agreed project fee (₦)' }[rateUnit];
   const delivery = rateUnit === 'project' && value.kind === 'delivery';
   return (
     <div className="grid gap-3">
