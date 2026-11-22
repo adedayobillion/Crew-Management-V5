@@ -188,11 +188,11 @@ test('group booking creates one linked request per crew member', async () => {
   const l3id = l3.listing && l3.listing.id;
   assert.ok(l3id, JSON.stringify(l3)); assert.equal((await client.a.post('/api/group-bookings', { professionalIds: [l2, l3id], title: 'Twice', startDate: d, endDate: d })).status, 409, 'one person cannot be booked under two roles on the same dates');
   // read receipts: the sender's message is "seen" only after the other side marks it read
-  const before = (await client.a.get(`/api/bookings/${b1.id}/messages`)).body.find(m => m.kind === 'request');
-  assert.equal(before.read_by_other, false);
+  const unseen = (await client.a.get(`/api/bookings/${b1.id}/messages`)).body.find(m => m.kind === 'request');
+  assert.equal(unseen.read_by_other, false);
   assert.equal((await crew.a.post(`/api/inbox/${b1.id}/read`, {})).status, 200);
-  const after = (await client.a.get(`/api/bookings/${b1.id}/messages`)).body.find(m => m.kind === 'request');
-  assert.equal(after.read_by_other, true);
+  const seenMsg = (await client.a.get(`/api/bookings/${b1.id}/messages`)).body.find(m => m.kind === 'request');
+  assert.equal(seenMsg.read_by_other, true);
   // each side only sees its own money
   const cm = (await crew.a.get(`/api/bookings/${b1.id}/messages`)).body, km = (await client.a.get(`/api/bookings/${b1.id}/messages`)).body;
   assert.ok(!JSON.stringify(cm).includes('client_total') && JSON.stringify(cm).includes('crew_net'), 'crew sees payout, not the client total');
