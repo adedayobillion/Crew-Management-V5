@@ -502,6 +502,11 @@ async function initDb() {
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS reason TEXT;
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'open';
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS resolution TEXT;
+      CREATE TABLE IF NOT EXISTS call_sheets (
+        id SERIAL PRIMARY KEY, owner_id INT NOT NULL, token VARCHAR(24) UNIQUE NOT NULL, data JSONB NOT NULL DEFAULT '{}',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS call_sheets_owner_idx ON call_sheets (owner_id);
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS outcome VARCHAR(20);
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS resolved_by VARCHAR(80);
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP;
@@ -1030,6 +1035,7 @@ app.post('/api/account/delete', requireUser, authLimiter, wrap(async (req, res) 
     await db.query('DELETE FROM sessions WHERE user_id = $1', [req.user.id]);
     await db.query('DELETE FROM email_tokens WHERE user_id = $1', [req.user.id]);
     await db.query(`UPDATE crew_applications SET name = 'Deleted user', full_name = 'Deleted user', email = NULL, bio = NULL WHERE user_id = $1`, [req.user.id]);
+    await db.query('DELETE FROM call_sheets WHERE owner_id = $1', [req.user.id]);
     await db.query(`UPDATE users SET name = 'Deleted user', email = $2, password_hash = $3, phone = NULL, location = NULL, bio = NULL, is_suspended = TRUE, email_verified = FALSE WHERE id = $1`,
       [req.user.id, 'deleted-' + req.user.id + '@deleted.invalid', await bcrypt.hash(crypto.randomBytes(24).toString('hex'), 10)]);
   });
@@ -2177,6 +2183,92 @@ app.patch('/api/admin/id-documents/:id/review', adminGuard, wrap(async(req,res)=
   res.json({success:true});
 }));
 
+/* ---------------- call sheets: a free tool for any account; shared by an unguessable link ---------------- */
+const isTime = v => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(v || ''));
+function cleanSheet(b) {
+  const t = (v, n) => str(v, n);
+  const list = (v, max) => (Array.isArray(v) ? v.slice(0, max) : []);
+  const time = v => (isTime(v) ? v : '');
+  const map = String(b.mapUrl || '').trim();
+  return {
+    title: t(b.title, 120), project: t(b.project, 120), date: isDate(b.date) ? b.date : '', location: t(b.location, 200),
+    mapUrl: /^https?:\/\/[^\s]{4,300}$/i.test(map) ? map : '', generalCall: time(b.generalCall), wrap: time(b.wrap),
+    producer: t(b.producer, 80), director: t(b.director, 80), notes: t(b.notes, 2000), hospital: t(b.hospital, 200),
+    emergency: list(b.emergency, 6).map(e => ({ name: t(e && e.name, 80), phone: t(e && e.phone, 30) })).filter(e => e.name || e.phone),
+    schedule: list(b.schedule, 40).map(r => ({ time: time(r && r.time), item: t(r && r.item, 200) })).filter(r => r.item),
+    crew: list(b.crew, 150).map(c => ({ name: t(c && c.name, 80), role: t(c && c.role, 80), call: time(c && c.call), phone: t(c && c.phone, 30), bookingId: toInt(c && c.bookingId) || null })).filter(c => c.name),
+    showPhones: b.showPhones === true
+  };
+}
+const sheetRow = r => ({ id: r.id, token: r.token, data: r.data, created_at: r.created_at, updated_at: r.updated_at });
+async function ownSheet(req) {
+  const r = (await pool.query('SELECT * FROM call_sheets WHERE id = $1 AND owner_id = $2', [toInt(req.params.id) || 0, req.user.id])).rows[0];
+  if (!r) fail(404, 'Call sheet not found.');
+  return r;
+}
+// Only crew booked by this client and still active; phone numbers only once the booking is paid.
+app.get('/api/callsheets/booked-crew', requireUser, wrap(async (req, res) => {
+  const date = isDate(req.query.date) ? req.query.date : null;
+  const { rows } = await pool.query(
+    `SELECT b.id, b.professional_id, b.start_date, b.end_date, b.payment_status, p.name, p.role FROM bookings b JOIN professionals p ON p.id = b.professional_id
+      WHERE b.user_id = $1 AND b.status IN ('confirmed','in_progress') AND ($2::date IS NULL OR ($2::date BETWEEN b.start_date AND b.end_date)) ORDER BY b.start_date, p.name LIMIT 100`, [req.user.id, date]);
+  const out = [];
+  for (const b of rows) {
+    let phone = '';
+    if (b.payment_status === 'paid') { const uid = (await crewUserIdsFor(pool, b.professional_id))[0]; if (uid) phone = (await pool.query('SELECT phone FROM users WHERE id = $1', [uid])).rows[0]?.phone || ''; }
+    out.push({ bookingId: b.id, name: b.name, role: b.role, call: '', phone });
+  }
+  res.json({ crew: out });
+}));
+app.get('/api/callsheets', requireUser, wrap(async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM call_sheets WHERE owner_id = $1 ORDER BY updated_at DESC LIMIT 100', [req.user.id]);
+  res.json({ sheets: rows.map(sheetRow) });
+}));
+app.post('/api/callsheets', requireUser, wrap(async (req, res) => {
+  const n = (await pool.query('SELECT COUNT(*)::int AS n FROM call_sheets WHERE owner_id = $1', [req.user.id])).rows[0].n;
+  if (n >= 50) fail(429, 'You have reached the limit of 50 call sheets. Delete an old one first.');
+  const data = cleanSheet(req.body || {});
+  if (!data.title) fail(400, 'Give the call sheet a title.');
+  const token = crypto.randomBytes(12).toString('base64url');
+  const r = (await pool.query('INSERT INTO call_sheets (owner_id, token, data) VALUES ($1,$2,$3) RETURNING *', [req.user.id, token, JSON.stringify(data)])).rows[0];
+  res.status(201).json({ sheet: sheetRow(r) });
+}));
+app.put('/api/callsheets/:id', requireUser, wrap(async (req, res) => {
+  const cur = await ownSheet(req);
+  const data = cleanSheet(req.body || {});
+  if (!data.title) fail(400, 'Give the call sheet a title.');
+  const r = (await pool.query('UPDATE call_sheets SET data = $2, updated_at = NOW() WHERE id = $1 RETURNING *', [cur.id, JSON.stringify(data)])).rows[0];
+  res.json({ sheet: sheetRow(r) });
+}));
+app.delete('/api/callsheets/:id', requireUser, wrap(async (req, res) => {
+  const cur = await ownSheet(req);
+  await pool.query('DELETE FROM call_sheets WHERE id = $1', [cur.id]);
+  res.json({ success: true });
+}));
+// Tell the booked crew on the sheet (in the app and by email) that it is ready or has changed.
+app.post('/api/callsheets/:id/notify', requireUser, wrap(async (req, res) => {
+  const cur = await ownSheet(req);
+  const ids = [...new Set((cur.data.crew || []).map(c => c.bookingId).filter(Boolean))];
+  if (!ids.length) fail(400, 'Add crew booked through the app to notify them.');
+  const { rows } = await pool.query(`SELECT id, professional_id, reference FROM bookings WHERE id = ANY($1::int[]) AND user_id = $2`, [ids, req.user.id]);
+  const link = appBase() + '/?sheet=' + cur.token;
+  let told = 0;
+  for (const b of rows) {
+    const uid = (await crewUserIdsFor(pool, b.professional_id))[0]; if (!uid) continue;
+    emitMessageNotification(uid, { type: 'message', booking_id: b.id, reference: b.reference || refFor(b.id), sender_name: req.user.name, preview: 'Call sheet: ' + (cur.data.title || 'your shoot') + (cur.data.date ? ' · ' + cur.data.date : ''), created_at: new Date().toISOString() });
+    emailUsers([uid], 'Call sheet: ' + (cur.data.title || 'your shoot'), [req.user.name + ' shared the call sheet for ' + (cur.data.title || 'your shoot') + (cur.data.date ? ' on ' + cur.data.date : '') + '.', 'Open it here: ' + link], '/?sheet=' + cur.token, 'sheet' + cur.id + '-' + Date.now()).catch(() => {});
+    told++;
+  }
+  res.json({ success: true, notified: told });
+}));
+// Public, read-only. Crew phone numbers are hidden unless the producer turned them on.
+app.get('/api/public/callsheets/:token', wrap(async (req, res) => {
+  const r = (await pool.query('SELECT data, updated_at FROM call_sheets WHERE token = $1', [String(req.params.token).slice(0, 24)])).rows[0];
+  if (!r) fail(404, 'This call sheet link is not valid any more.');
+  const d = { ...r.data, crew: (r.data.crew || []).map(c => ({ name: c.name, role: c.role, call: c.call, phone: r.data.showPhones ? c.phone : '' })) };
+  res.set('X-Robots-Tag', 'noindex, nofollow').json({ sheet: d, updated_at: r.updated_at });
+}));
+
 /* ---------------- admin: disputes, chat review and support messages ---------------- */
 // Admins can read a booking chat only through a dispute, with a written reason that goes into the audit log.
 const DISPUTE_SELECT = `SELECT d.id, d.status, d.reason, d.raised_by, d.created_at, d.outcome, d.resolution, d.resolved_by, d.resolved_at,
@@ -2409,6 +2501,7 @@ app.get('*', (req, res, next) => {
     if (!indexTemplate) indexTemplate = require('fs').readFileSync(path.join(__dirname, 'dist', 'index.html'), 'utf8');
   } catch (e) { return next(e); }
   const origin = baseUrl(req);
+  if (req.query.sheet) res.set('X-Robots-Tag', 'noindex, nofollow');
   res.type('html').send(indexTemplate.split('__APP_URL__').join(String(origin).replace(/[^\w:./-]/g, '')));
 });
 
