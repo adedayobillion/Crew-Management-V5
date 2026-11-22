@@ -1893,7 +1893,6 @@ app.post('/api/bookings/:id/offers', requireUser, wrap(async (req, res) => {
     const pro = (await db.query('SELECT rate, rate_unit FROM professionals WHERE id = $1', [b.professional_id])).rows[0];
     const mine = ownsBooking(req.user, b) ? 'client' : 'crew';
     const o = parseProposal(req.body || {}, b.daily_rate || (pro && pro.rate), pro && pro.rate_unit);
-    if (mine === 'client' && req.body.dailyRate != null && Number(req.body.dailyRate) !== Number(b.daily_rate || pro.rate)) fail(403, 'Only the crew member can change the daily rate.');
     const holds = BLOCKING_STATUSES.includes(b.status);
     const clash = o.schedule_kind === 'delivery' ? { rows: [] } : await db.query(
       `SELECT 1 FROM availability_blocks WHERE professional_id = $1 AND NOT (end_date < $2 OR start_date > $3)

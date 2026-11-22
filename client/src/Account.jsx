@@ -552,7 +552,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                     {propose && (
                       <form onSubmit={sendProposal} className="grid gap-3 border-t border-line bg-white p-3.5">
                         <div className="flex items-center justify-between"><strong className="text-sm">Propose a change</strong><button type="button" className="text-xs text-muted underline" onClick={() => setPropose(null)}>Cancel</button></div>
-                        <ProposalFields value={propose} onChange={setPropose} canEditRate={current.my_role === 'crew'} viewer={current.my_role} rateUnit={current.rate_unit || 'day'} baseRate={Number(current.daily_rate || 0)} />
+                        <ProposalFields value={propose} onChange={setPropose} canEditRate viewer={current.my_role} rateUnit={current.rate_unit || 'day'} baseRate={Number(current.daily_rate || 0)} />
                         <input className={inputCls} value={note} maxLength={1000} onChange={e => setNote(e.target.value)} placeholder="Add a note (optional)" />
                         <Button type="submit" disabled={busy || !propose.start}>{busy ? 'Sending…' : 'Send proposal'}</Button>
                       </form>

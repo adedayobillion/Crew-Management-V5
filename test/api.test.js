@@ -224,6 +224,14 @@ test('hourly and flat-fee listings: quantity, delivery date, calendar blocking',
   const h = await client.a.post('/api/bookings', { professionalId: lh.id, startDate: d, quantity: 3.5, message: 'edit' });
   assert.equal(h.status, 201, JSON.stringify(h.body));
   assert.equal(Number(h.body.booking.client_total), 38500); assert.equal(h.body.booking.crew_net, undefined);
+  // either side can propose a new price in chat; the other side accepts and totals are recomputed
+  const ho = await client.a.post(`/api/bookings/${h.body.booking.id}/offers`, { startDate: d, quantity: 3.5, dailyRate: 8000, note: 'Agreed 8k in chat' });
+  assert.equal(ho.status, 201, JSON.stringify(ho.body));
+  const hm = (await pool.query(`SELECT id FROM messages WHERE booking_id = $1 AND kind = 'offer' ORDER BY id DESC LIMIT 1`, [h.body.booking.id])).rows[0].id;
+  assert.equal((await client.a.post(`/api/bookings/${h.body.booking.id}/offers/${hm}/respond`, { response: 'accepted' })).status, 403, 'proposer cannot accept their own change');
+  assert.equal((await hr.a.post(`/api/bookings/${h.body.booking.id}/offers/${hm}/respond`, { response: 'accepted' })).status, 200);
+  const hb = (await pool.query('SELECT client_total, crew_net, daily_rate FROM bookings WHERE id = $1', [h.body.booking.id])).rows[0];
+  assert.deepEqual([Number(hb.daily_rate), Number(hb.client_total), Number(hb.crew_net)], [8000, 30800, 25200]);
   const dl = await client.a.post('/api/bookings', { professionalId: lp.id, scheduleKind: 'delivery', deliveryDate: d2, message: 'grade' });
   assert.equal(dl.status, 201, JSON.stringify(dl.body));
   assert.equal(dl.body.booking.schedule_kind, 'delivery'); assert.equal(Number(dl.body.booking.client_total), 165000);
