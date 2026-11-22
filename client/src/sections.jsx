@@ -92,12 +92,21 @@ function HeroWords({ text, start = 0, accent = false }) {
   ));
 }
 function HeroStroke({ delay }) {
+  // Camera viewfinder: corner brackets snap in around the line, then focus; a REC light blinks on the bottom edge.
   const reduce = useReducedMotion();
+  const corner = 'absolute size-[.34em] border-lime';
+  const frame = { initial: reduce ? false : { opacity: 0, scale: 1.18 }, animate: { opacity: 1, scale: 1 }, transition: { duration: 0.55, delay, ease: [0.22, 1, 0.36, 1] } };
   return (
-    <svg aria-hidden viewBox="0 0 300 14" preserveAspectRatio="none" className="pointer-events-none absolute -bottom-1.5 left-0 h-[.3em] w-full overflow-visible">
-      <motion.path d="M3 9 C 55 2, 110 13, 170 6 S 262 4, 297 8" fill="none" stroke="#c9f36a" strokeWidth="3.5" strokeLinecap="round" vectorEffect="non-scaling-stroke"
-        initial={reduce ? false : { pathLength: 0, opacity: 0 }} animate={{ pathLength: 1, opacity: 0.95 }} transition={{ duration: 0.9, delay, ease: 'easeOut' }} />
-    </svg>
+    <motion.span aria-hidden {...frame} className="pointer-events-none absolute -inset-x-[.16em] -inset-y-[.06em] origin-center">
+      <span className={corner + ' left-0 top-0 rounded-tl-[3px] border-l-[3px] border-t-[3px]'} />
+      <span className={corner + ' right-0 top-0 rounded-tr-[3px] border-r-[3px] border-t-[3px]'} />
+      <span className={corner + ' bottom-0 left-0 rounded-bl-[3px] border-b-[3px] border-l-[3px]'} />
+      <span className={corner + ' bottom-0 right-0 rounded-br-[3px] border-b-[3px] border-r-[3px]'} />
+      <motion.span className="absolute inset-0 rounded-[4px] border border-lime/0" animate={reduce ? undefined : { borderColor: ['#c9f36a00', '#c9f36a66', '#c9f36a00'] }} transition={{ delay: delay + 0.5, duration: 0.9 }} />
+      <span className="absolute -bottom-[.62em] right-[.3em] flex items-center gap-1 rounded-full bg-[#172337] px-1.5 py-0.5 font-display text-[9px] font-extrabold uppercase leading-none tracking-[.14em] text-white sm:text-[10px]">
+        <span className={'size-1.5 rounded-full bg-[#ff4d4d] shadow-[0_0_8px_#ff4d4d] ' + (reduce ? '' : 'animate-pulse')} />REC
+      </span>
+    </motion.span>
   );
 }
 const TICKER_ROLES = ['Cinematographer', 'Gaffer', 'Sound mixer', 'Colourist', 'Editor', 'Director', 'Makeup artist', 'Drone pilot', 'Production designer', 'Stylist'];
