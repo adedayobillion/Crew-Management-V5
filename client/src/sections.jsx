@@ -25,12 +25,12 @@ function ModeSwitch({ user, onSwitch, className }) {
   );
 }
 
-export function Nav({ user, onLogin, onLogout, onDashboard, onCrewDashboard, onSwitch, onHome, onJoin, onProfile, onMessages, unreadCount = 0 }) {
+export function Nav({ user, onLogin, onLogout, onDashboard, onCrewDashboard, onSwitch, onHome, onJoin, onProfile, onMessages, onTools, unreadCount = 0 }) {
   const [open, setOpen] = useState(false);
   const crewMode = !!user && user.accountType === 'crew';
   const workspace = crewMode ? onCrewDashboard : onDashboard;
   const workspaceLabel = crewMode ? 'My listings' : 'My bookings';
-  const links = [['#discover', 'Find professionals'], ['#how', 'How it works'], ['#trust', 'Safe bookings'], ['#join', 'Join as crew']];
+  const links = [['#discover', 'Find professionals'], ['#how', 'How it works'], ['#trust', 'Safe bookings'], ['#join', 'Join as crew'], ['#tools', 'Free call sheet']];
   const go = fn => e => { e.preventDefault(); setOpen(false); fn(); };
   return (
     <>
@@ -43,7 +43,7 @@ export function Nav({ user, onLogin, onLogout, onDashboard, onCrewDashboard, onS
           </a>
           <nav className="hidden gap-6 text-[13px] font-bold md:flex">
             {links.map(([h, l]) => (
-              <a key={h} href={h} onClick={h === '#join' ? undefined : () => onHome()} className="group/l relative py-1.5 transition-colors hover:text-[#4d6f12]">{l}<span className="absolute inset-x-0 bottom-0 h-0.5 origin-left scale-x-0 rounded bg-lime-deep transition-transform duration-300 group-hover/l:scale-x-100" /></a>
+              <a key={h} href={h} onClick={h === '#join' ? undefined : h === '#tools' ? e => { e.preventDefault(); onTools(); } : () => onHome()} className="group/l relative py-1.5 transition-colors hover:text-[#4d6f12]">{l}<span className="absolute inset-x-0 bottom-0 h-0.5 origin-left scale-x-0 rounded bg-lime-deep transition-transform duration-300 group-hover/l:scale-x-100" /></a>
             ))}
           </nav>
           <div className="flex shrink-0 items-center gap-1 sm:gap-2">
@@ -61,7 +61,7 @@ export function Nav({ user, onLogin, onLogout, onDashboard, onCrewDashboard, onS
             {open && (
               <motion.nav initial={{ opacity: 0, y: -10, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -8 }} transition={{ type: 'spring', stiffness: 420, damping: 30 }}
                 className="absolute inset-x-0 top-[calc(100%+8px)] flex flex-col gap-1 rounded-2xl border border-line bg-white p-3 text-sm font-bold shadow-soft md:hidden">
-                {links.map(([h, l]) => <a key={h} href={h} onClick={() => setOpen(false)} className="rounded-xl px-3 py-3 hover:bg-lime-soft">{l}</a>)}
+                {links.map(([h, l]) => <a key={h} href={h} onClick={h === '#tools' ? e => { e.preventDefault(); setOpen(false); onTools(); } : () => setOpen(false)} className="rounded-xl px-3 py-3 hover:bg-lime-soft">{l}</a>)}
                 {user && <ModeSwitch user={user} onSwitch={m => { setOpen(false); onSwitch(m); }} className="mx-1 my-1 sm:hidden [&>button]:py-2.5" />}
                 <button type="button" onClick={() => { setOpen(false); onProfile(); }} className="rounded-xl px-3 py-3 text-left hover:bg-lime-soft">My profile & settings</button>
                 <button type="button" onClick={() => { setOpen(false); onMessages(); }} className="flex items-center justify-between rounded-xl px-3 py-3 text-left hover:bg-lime-soft"><span>Messages</span>{unreadCount > 0 && <span className="rounded-full bg-[#d84b4b] px-2 py-0.5 text-[10px] font-bold text-white">{unreadCount}</span>}</button>
@@ -410,7 +410,7 @@ export function CrewDashboard({ onBack, toast }) {
 }
 
 /* ---------- Footer ---------- */
-export function Footer({ openLegal }) {
+export function Footer({ openLegal, onTools }) {
   const lk = 'transition-colors hover:text-lime';
   return (
     <footer className="bg-ink py-9 text-white" style={{ background: 'radial-gradient(600px 240px at 80% 0,#c9f36a14,transparent 70%),#172337' }}>
@@ -419,6 +419,7 @@ export function Footer({ openLegal }) {
           <a href="#" className="flex items-center gap-2.5 whitespace-nowrap font-display text-sm font-extrabold tracking-[-.03em]"><span className="grid size-9 place-items-center rounded-xl bg-lime text-lg text-ink">C</span><span>CREW MANAGEMENT<small className="block text-[9px] tracking-[.16em] text-[#aebbc8]">AGENCY · NIGERIA</small></span></a>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-[#d2dbe3]">
             {[['#discover', 'Find crew'], ['#how', 'How it works'], ['#trust', 'Safe bookings'], ['#join', 'Join as crew']].map(([h, l]) => <a key={h} href={h} className={lk}>{l}</a>)}
+            <button type="button" onClick={onTools} className={lk}>Free call sheet</button>
             {[['terms', 'Terms'], ['privacy', 'Privacy'], ['cancellation', 'Cancellation & refunds'], ['crew', 'Crew & payouts']].map(([k, l]) => <button key={k} type="button" onClick={() => openLegal(k)} className={lk}>{l}</button>)}
           </div>
         </div>

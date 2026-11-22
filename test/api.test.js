@@ -25,7 +25,7 @@ function agent() {
     let json = null; try { json = await res.json(); } catch (e) { /* not json */ }
     return { status: res.status, body: json };
   };
-  return { get: (p, h) => call('GET', p, undefined, h), post: (p, b, h) => call('POST', p, b ?? {}, h), patch: (p, b, h) => call('PATCH', p, b, h), del: (p, h) => call('DELETE', p, undefined, h) };
+  return { get: (p, h) => call('GET', p, undefined, h), post: (p, b, h) => call('POST', p, b ?? {}, h), patch: (p, b, h) => call('PATCH', p, b, h), put: (p, b, h) => call('PUT', p, b, h), del: (p, h) => call('DELETE', p, undefined, h) };
 }
 function totp(secret) {
   const B = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; let bits = ''; for (const c of secret) bits += B.indexOf(c).toString(2).padStart(5, '0');
@@ -283,4 +283,26 @@ test('admin disputes: audited chat review, support messages, resolution', async 
   const row = (await pool.query('SELECT status, payment_status FROM bookings WHERE id = $1', [pay.id])).rows[0];
   assert.deepEqual([row.status, row.payment_status], ['refunded', 'refunded']);
   assert.equal((await call(`/api/admin/disputes/${d.id}/resolve`, 'POST', { outcome: 'dismiss', note: 'x'.repeat(20) })).status, 409, 'cannot resolve twice');
+});
+
+test('call sheets: create, public view hides phones, owner-only edits, booked crew', async () => {
+  const body = { title: 'Brand film day 1', project: 'Brand film', date: tomorrow(30), location: 'Lekki, Lagos', mapUrl: 'javascript:alert(1)', generalCall: '07:00', notes: 'Bring water',
+    emergency: [{ name: 'Producer', phone: '0800 111 2222' }], schedule: [{ time: '07:30', item: 'Setup' }, { time: '25:99', item: 'Bad time ignored' }],
+    crew: [{ name: 'Ada', role: 'DP', call: '06:30', phone: '0801 000 0000' }, { name: '', role: 'nobody' }], showPhones: false };
+  assert.equal((await client.a.post('/api/callsheets', { ...body, title: '' })).status, 400);
+  const c = await client.a.post('/api/callsheets', body); assert.equal(c.status, 201, JSON.stringify(c.body));
+  const sheet = c.body.sheet; assert.ok(sheet.token.length >= 16);
+  assert.equal(sheet.data.mapUrl, '', 'non-http map links are dropped'); assert.equal(sheet.data.crew.length, 1); assert.equal(sheet.data.schedule[1].time, '');
+  const pub = await (await fetch(BASE + '/api/public/callsheets/' + sheet.token)).json();
+  assert.equal(pub.sheet.title, 'Brand film day 1'); assert.equal(pub.sheet.crew[0].phone, '', 'crew phones hidden by default'); assert.equal(pub.sheet.emergency[0].phone, '0800 111 2222');
+  assert.equal((await fetch(BASE + '/api/public/callsheets/doesnotexist')).status, 404);
+  assert.equal((await crew.a.put('/api/callsheets/' + sheet.id, body)).status, 404, 'only the owner can edit');
+  assert.equal((await crew.a.del('/api/callsheets/' + sheet.id)).status, 404);
+  const u = await client.a.put('/api/callsheets/' + sheet.id, { ...body, showPhones: true }); assert.equal(u.status, 200);
+  assert.equal((await (await fetch(BASE + '/api/public/callsheets/' + sheet.token)).json()).sheet.crew[0].phone, '0801 000 0000', 'owner can show phones');
+  assert.equal((await client.a.get('/api/callsheets')).body.sheets.length >= 1, true);
+  assert.equal((await client.a.get('/api/callsheets/booked-crew')).status, 200);
+  assert.equal((await client.a.post('/api/callsheets/' + sheet.id + '/notify', {})).status, 400, 'no booked crew to notify');
+  assert.equal((await client.a.del('/api/callsheets/' + sheet.id)).status, 200);
+  assert.equal((await fetch(BASE + '/api/public/callsheets/' + sheet.token)).status, 404, 'deleted sheets stop working');
 });
