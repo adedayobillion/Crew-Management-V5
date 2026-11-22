@@ -589,6 +589,10 @@ async function initDb() {
 
     // Older databases store professionals.application_id as a number; the app uses text ids like 'app-6'.
     try {
+      // Older databases restrict booking_unit to full/half; allow the hourly and project units too.
+      const { rows: bu } = await client.query(`SELECT conname FROM pg_constraint WHERE conrelid = 'bookings'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) ILIKE '%booking_unit%'`);
+      for (const c of bu) await client.query(`ALTER TABLE bookings DROP CONSTRAINT "${String(c.conname).replace(/"/g, '')}"`);
+      await client.query(`ALTER TABLE bookings ADD CONSTRAINT bookings_booking_unit_check CHECK (booking_unit IN ('full','half','hour','project'))`).catch(e => { if (e.code !== '42710') throw e; });
       const { rows: ty } = await client.query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='professionals' AND column_name='application_id'`);
       if (ty[0] && !['character varying', 'text'].includes(ty[0].data_type)) {
         await client.query(`ALTER TABLE professionals ALTER COLUMN application_id TYPE VARCHAR(255) USING application_id::text`);
