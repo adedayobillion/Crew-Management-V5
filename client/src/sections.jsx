@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import CameraArt from './CameraArt.jsx';
 import CrewListing from './CrewListing.jsx';
 import { AnimatedNumber, Button, Field, Marquee, Reveal, SkeletonCard, SpotlightCard, Tagline, inputCls } from './ui.jsx';
@@ -77,6 +77,53 @@ export function Nav({ user, onLogin, onLogout, onDashboard, onCrewDashboard, onS
 
 /* ---------- Hero + search ---------- */
 const rise = d => ({ initial: { opacity: 0, y: 22, filter: 'blur(6px)' }, animate: { opacity: 1, y: 0, filter: 'blur(0px)' }, transition: { duration: 0.8, delay: d, ease: [0.22, 1, 0.36, 1] } });
+/* Headline: each word rises out of a mask (like titles in a film), then a brush stroke is drawn under the second line. */
+function HeroWords({ text, start = 0, accent = false }) {
+  const reduce = useReducedMotion();
+  return text.split(' ').map((w, i) => (
+    <span key={i} className="inline-block overflow-hidden pb-[.12em] align-bottom [margin-bottom:-.12em]">
+      <motion.span
+        className={cn('inline-block', accent && 'animate-shine bg-[linear-gradient(90deg,#c9f36a,#f4ffd0,#9ed544,#c9f36a)] bg-[length:250%_100%] bg-clip-text text-transparent')}
+        initial={reduce ? false : { y: '115%', rotate: 3, opacity: 0, filter: 'blur(10px)' }}
+        animate={{ y: 0, rotate: 0, opacity: 1, filter: 'blur(0px)' }}
+        transition={{ duration: 0.85, delay: start + i * 0.11, ease: [0.22, 1, 0.36, 1] }}
+      >{w}</motion.span>{i < text.split(' ').length - 1 ? '\u00a0' : ''}
+    </span>
+  ));
+}
+function HeroStroke({ delay }) {
+  const reduce = useReducedMotion();
+  return (
+    <svg aria-hidden viewBox="0 0 300 14" preserveAspectRatio="none" className="pointer-events-none absolute -bottom-1.5 left-0 h-[.3em] w-full overflow-visible">
+      <motion.path d="M3 9 C 55 2, 110 13, 170 6 S 262 4, 297 8" fill="none" stroke="#c9f36a" strokeWidth="3.5" strokeLinecap="round" vectorEffect="non-scaling-stroke"
+        initial={reduce ? false : { pathLength: 0, opacity: 0 }} animate={{ pathLength: 1, opacity: 0.95 }} transition={{ duration: 0.9, delay, ease: 'easeOut' }} />
+    </svg>
+  );
+}
+const TICKER_ROLES = ['Cinematographer', 'Gaffer', 'Sound mixer', 'Colourist', 'Editor', 'Director', 'Makeup artist', 'Drone pilot', 'Production designer', 'Stylist'];
+function RoleTicker() {
+  const reduce = useReducedMotion();
+  const [i, setI] = useState(0); const [n, setN] = useState(0); const [del, setDel] = useState(false);
+  useEffect(() => {
+    if (reduce) { const t = setInterval(() => setI(v => (v + 1) % TICKER_ROLES.length), 2400); return () => clearInterval(t); }
+    const word = TICKER_ROLES[i];
+    const t = setTimeout(() => {
+      if (!del && n < word.length) setN(n + 1);
+      else if (!del) setDel(true);
+      else if (n > 0) setN(n - 1);
+      else { setDel(false); setI((i + 1) % TICKER_ROLES.length); }
+    }, !del && n === word.length ? 1500 : del ? 28 : 65);
+    return () => clearTimeout(t);
+  }, [i, n, del, reduce]);
+  const word = TICKER_ROLES[i];
+  return (
+    <motion.p initial={reduce ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 1.2, duration: 0.6 }} aria-live="off" className="mb-3 flex min-h-[1.6em] items-center gap-2 font-display text-sm font-bold tracking-[-.01em] text-[#c5d0db] sm:text-base">
+      <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-extrabold uppercase tracking-[.14em] text-lime">Now booking</span>
+      <span className="text-white">{reduce ? word : word.slice(0, n)}<span aria-hidden className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[2px] animate-pulse bg-lime" /></span>
+    </motion.p>
+  );
+}
+
 export function Hero({ filters, setFilters, onJoin }) {
   const set = k => e => setFilters(f => ({ ...f, [k]: e.target.value }));
   return (
@@ -88,9 +135,14 @@ export function Hero({ filters, setFilters, onJoin }) {
           <motion.div {...rise(0.05)} className="inline-flex items-center gap-2 rounded-full border border-lime/25 bg-lime/10 px-3 py-1.5 font-display text-[10px] font-extrabold uppercase tracking-[.16em] text-lime">
             <span className="size-1.5 animate-pulse-ring rounded-full bg-lime shadow-[0_0_0_0_#c9f36a99]" />The crew marketplace for production
           </motion.div>
-          <motion.h1 {...rise(0.14)} className="my-4 max-w-[660px] font-display text-[clamp(38px,10.4vw,48px)] font-extrabold leading-[1.03] tracking-[-.06em] sm:text-[clamp(38px,5vw,66px)]">
-            Find your people.<br /><em className="animate-shine bg-[linear-gradient(90deg,#c9f36a,#f4ffd0,#9ed544,#c9f36a)] bg-[length:250%_100%] bg-clip-text not-italic text-transparent">Make good work.</em>
-          </motion.h1>
+          <h1 aria-label="Find your people. Make good work." className="my-4 max-w-[660px] font-display text-[clamp(38px,10.4vw,48px)] font-extrabold leading-[1.03] tracking-[-.06em] sm:text-[clamp(38px,5vw,66px)]">
+            <span aria-hidden className="block"><HeroWords text="Find your people." start={0.15} /></span>
+            <span aria-hidden className="relative inline-block">
+              <HeroWords text="Make good work." start={0.6} accent />
+              <HeroStroke delay={1.35} />
+            </span>
+          </h1>
+          <RoleTicker />
           <motion.p {...rise(0.24)} className="max-w-[540px] text-sm leading-relaxed text-[#c5d0db] sm:text-base">Discover production professionals for film, TV, commercials and digital content. Compare skills, request a booking and keep the details organised in one place.</motion.p>
           <motion.div {...rise(0.34)} className="mt-5 flex gap-2.5 max-sm:flex-col sm:mt-6">
             <a href="#discover" className="max-sm:block"><Button className="max-sm:w-full">Explore professionals <ArrowDownRight className="size-4" aria-hidden="true" /></Button></a>
