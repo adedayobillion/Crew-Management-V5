@@ -6,7 +6,7 @@ import { BRAND } from './brand.js';
 
 const blankSheet = () => ({ title: '', project: '', date: todayLagos(), location: '', mapUrl: '', generalCall: '07:00', wrap: '', producer: '', director: '', notes: '', hospital: '', emergency: [{ name: '', phone: '' }], schedule: [{ time: '07:00', item: 'Crew call' }], crew: [], showPhones: false });
 const longDate = d => { try { return new Date(d + 'T00:00:00Z').toLocaleDateString('en-NG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }); } catch { return d; } };
-const sheetUrl = token => location.origin + '/?sheet=' + token;
+const sheetUrl = token => location.origin + '/sheet/' + token;
 
 /* The document itself: used by the public link, the preview and the printout. */
 export function SheetDocument({ sheet, updatedAt }) {

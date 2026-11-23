@@ -2440,7 +2440,7 @@ app.post('/api/callsheets/:id/notify', requireUser, wrap(async (req, res) => {
   const ids = [...new Set((cur.data.crew || []).map(c => c.bookingId).filter(Boolean))];
   if (!ids.length) fail(400, 'Add crew booked through the app to notify them.');
   const { rows } = await pool.query(`SELECT id, professional_id, reference FROM bookings WHERE id = ANY($1::int[]) AND user_id = $2`, [ids, req.user.id]);
-  const link = appBase() + '/?sheet=' + cur.token;
+  const link = appBase() + '/sheet/' + cur.token;
   let told = 0;
   for (const b of rows) {
     const uid = (await crewUserIdsFor(pool, b.professional_id))[0]; if (!uid) continue;
@@ -2690,7 +2690,7 @@ app.get('*', (req, res, next) => {
     if (!indexTemplate) indexTemplate = require('fs').readFileSync(path.join(__dirname, 'dist', 'index.html'), 'utf8');
   } catch (e) { return next(e); }
   const origin = baseUrl(req);
-  if (req.query.sheet) res.set('X-Robots-Tag', 'noindex, nofollow');
+  if (req.query.sheet || req.path.startsWith('/sheet/')) res.set('X-Robots-Tag', 'noindex, nofollow');
   res.type('html').send(indexTemplate.split('__APP_URL__').join(String(origin).replace(/[^\w:./-]/g, '')));
 });
 

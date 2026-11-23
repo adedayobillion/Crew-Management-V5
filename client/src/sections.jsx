@@ -30,7 +30,8 @@ export function Nav({ user, onLogin, onLogout, onDashboard, onCrewDashboard, onS
   const crewMode = !!user && user.accountType === 'crew';
   const workspace = crewMode ? onCrewDashboard : onDashboard;
   const workspaceLabel = crewMode ? 'My listings' : 'My bookings';
-  const links = [['#discover', 'Find professionals'], ['#how', 'How it works'], ['#trust', 'Safe bookings'], ['#join', 'Join as crew'], ['#jobs', 'Job board'], ['#tools', 'Free call sheet']];
+  const links = [['#discover', 'Find crew'], ['#jobs', 'Job board'], ['#how', 'How it works'], ['#tools', 'Call sheets']];
+  const menuLinks = [...links, ['#trust', 'Safe bookings'], ['#join', 'Join as crew']];
   const go = fn => e => { e.preventDefault(); setOpen(false); fn(); };
   return (
     <>
@@ -39,30 +40,30 @@ export function Nav({ user, onLogin, onLogout, onDashboard, onCrewDashboard, onS
         <div className="relative flex h-[60px] items-center justify-between gap-3 rounded-[17px] border border-white/80 bg-white/75 px-3.5 shadow-[0_10px_40px_#17233714,0_0_0_1px_#17233710] backdrop-blur-xl backdrop-saturate-150 sm:h-[66px] sm:rounded-[20px] sm:px-4">
           <a href="#" onClick={go(onHome)} className="group flex min-w-0 shrink items-center gap-2.5 whitespace-nowrap font-display font-extrabold tracking-[-.03em]">
             <motion.span whileHover={{ rotate: -10, scale: 1.08 }} transition={{ type: 'spring', stiffness: 400, damping: 14 }} className="grid size-9 place-items-center rounded-xl bg-lime text-lg shadow-[0_6px_16px_#8ebc4655,inset_0_1px_0_#fff9] sm:size-10">C</motion.span>
-            <span className="min-w-0 truncate text-[11px] leading-tight max-[389px]:hidden sm:text-sm">CREW MANAGEMENT<small className="block text-[8px] font-extrabold tracking-[.16em] text-muted max-[430px]:hidden sm:text-[9px]">AGENCY · THE CREW MARKETPLACE</small></span>
+            <span className="min-w-0 truncate text-[11px] leading-tight max-[389px]:hidden sm:text-sm">CREW MANAGEMENT<small className="block text-[8px] font-extrabold tracking-[.16em] text-muted max-[430px]:hidden sm:text-[9px]">AGENCY · NIGERIA</small></span>
           </a>
-          <nav className="hidden gap-6 text-[13px] font-bold md:flex">
+          <nav className="hidden items-center gap-5 whitespace-nowrap text-[13px] font-bold lg:flex xl:gap-7">
             {links.map(([h, l]) => (
               <a key={h} href={h} onClick={h === '#join' ? undefined : h === '#tools' ? e => { e.preventDefault(); onTools(); } : h === '#jobs' ? e => { e.preventDefault(); onJobs(); } : () => onHome()} className="group/l relative py-1.5 transition-colors hover:text-[#4d6f12]">{l}<span className="absolute inset-x-0 bottom-0 h-0.5 origin-left scale-x-0 rounded bg-lime-deep transition-transform duration-300 group-hover/l:scale-x-100" /></a>
             ))}
           </nav>
           <div className="flex shrink-0 items-center gap-1 sm:gap-2">
-            {user && <ModeSwitch user={user} onSwitch={onSwitch} className="max-sm:hidden" />}
+            {user && <ModeSwitch user={user} onSwitch={onSwitch} className="max-xl:hidden" />}
             <button type="button" onClick={onMessages} aria-label="Messages" title="Messages" className="relative grid size-9 place-items-center rounded-xl text-lg text-ink transition hover:bg-[#edf1f5]">
               <Mail className="size-5" strokeWidth={1.75} aria-hidden="true" />
               {unreadCount > 0 && <span className="absolute -right-0.5 -top-0.5 grid min-w-[17px] place-items-center rounded-full bg-[#d84b4b] px-1 text-[9px] font-extrabold leading-[17px] text-white">{unreadCount > 99 ? '99+' : unreadCount}</span>}
             </button>
-            <button type="button" onClick={onProfile} aria-label="Profile" title="Profile" className="flex h-9 items-center justify-center gap-1.5 rounded-xl px-2 text-sm font-bold text-ink transition hover:bg-[#edf1f5]"><UserRound className="size-5" strokeWidth={1.75} aria-hidden="true" /><span className="hidden sm:inline">Profile</span></button>
+            <button type="button" onClick={onProfile} aria-label="Profile" title="Profile" className="flex h-9 items-center justify-center gap-1.5 rounded-xl px-2 text-sm font-bold text-ink transition hover:bg-[#edf1f5]"><UserRound className="size-5" strokeWidth={1.75} aria-hidden="true" /><span className="hidden 2xl:inline">Profile</span></button>
             <Button size="sm" variant="ghost" onClick={user ? onLogout : onLogin}>{user ? 'Log out' : 'Log in'}</Button>
             <Button size="sm" className="max-[480px]:hidden" onClick={workspace}>{workspaceLabel}</Button>
-            <button className="grid size-9 place-items-center rounded-lg text-xl md:hidden" aria-label="Open menu" aria-expanded={open} onClick={() => setOpen(o => !o)}>{open ? <X className="size-5" aria-hidden="true" /> : <Menu className="size-5" aria-hidden="true" />}</button>
+            <button className="grid size-9 place-items-center rounded-lg text-xl lg:hidden" aria-label="Open menu" aria-expanded={open} onClick={() => setOpen(o => !o)}>{open ? <X className="size-5" aria-hidden="true" /> : <Menu className="size-5" aria-hidden="true" />}</button>
           </div>
           <AnimatePresence>
             {open && (
               <motion.nav initial={{ opacity: 0, y: -10, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -8 }} transition={{ type: 'spring', stiffness: 420, damping: 30 }}
-                className="absolute inset-x-0 top-[calc(100%+8px)] flex flex-col gap-1 rounded-2xl border border-line bg-white p-3 text-sm font-bold shadow-soft md:hidden">
-                {links.map(([h, l]) => <a key={h} href={h} onClick={h === '#tools' || h === '#jobs' ? e => { e.preventDefault(); setOpen(false); (h === '#jobs' ? onJobs : onTools)(); } : () => setOpen(false)} className="rounded-xl px-3 py-3 hover:bg-lime-soft">{l}</a>)}
-                {user && <ModeSwitch user={user} onSwitch={m => { setOpen(false); onSwitch(m); }} className="mx-1 my-1 sm:hidden [&>button]:py-2.5" />}
+                className="absolute inset-x-0 top-[calc(100%+8px)] flex flex-col gap-1 rounded-2xl border border-line bg-white p-3 text-sm font-bold shadow-soft lg:hidden">
+                {menuLinks.map(([h, l]) => <a key={h} href={h} onClick={h === '#tools' || h === '#jobs' ? e => { e.preventDefault(); setOpen(false); (h === '#jobs' ? onJobs : onTools)(); } : () => setOpen(false)} className="rounded-xl px-3 py-3 hover:bg-lime-soft">{l}</a>)}
+                {user && <ModeSwitch user={user} onSwitch={m => { setOpen(false); onSwitch(m); }} className="mx-1 my-1 xl:hidden [&>button]:py-2.5" />}
                 <button type="button" onClick={() => { setOpen(false); onProfile(); }} className="rounded-xl px-3 py-3 text-left hover:bg-lime-soft">My profile & settings</button>
                 <button type="button" onClick={() => { setOpen(false); onMessages(); }} className="flex items-center justify-between rounded-xl px-3 py-3 text-left hover:bg-lime-soft"><span>Messages</span>{unreadCount > 0 && <span className="rounded-full bg-[#d84b4b] px-2 py-0.5 text-[10px] font-bold text-white">{unreadCount}</span>}</button>
                 <button type="button" onClick={() => { setOpen(false); workspace(); }} className="rounded-xl bg-lime px-3 py-3 text-left min-[481px]:hidden">{workspaceLabel}</button>

@@ -10,14 +10,23 @@ import { JobBoard } from './JobBoard.jsx';
 import { ProfileDrawer } from './Profile.jsx';
 import { Mail } from 'lucide-react';
 
+const PAGE_PATHS = { marketplace: '/', jobs: '/jobs', tools: '/call-sheet', profile: '/profile', dashboard: '/bookings', crew: '/my-listings' };
+const PROTECTED = ['profile', 'dashboard', 'crew'];
+const pageFromPath = () => { const p = location.pathname.replace(/\/+$/, '') || '/'; return (Object.entries(PAGE_PATHS).find(([, v]) => v === p) || ['marketplace'])[0]; };
+const slug = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+const proPath = p => '/crew/' + p.id + '-' + slug(p.name);
+const proIdFromPath = () => { const m = location.pathname.match(/^\/crew\/(\d+)/); return m ? Number(m[1]) : null; };
+
 function Shell() {
   const toast = useToast();
   const [user, setUser] = useState(null);
   const [pros, setPros] = useState([]); const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState('marketplace');
+  const [page, setPage] = useState(pageFromPath);
+  const [authChecked, setAuthChecked] = useState(false);
   const [filters, setFilters] = useState({ q: '', category: '', location: '', sort: 'recommended' });
   const [saved, setSaved] = useState(new Set());
-  const [viewing, setViewing] = useState(null);
+  const [viewing, setViewingState] = useState(null);
+  const setViewing = p => { setViewingState(p); if (p) window.history.pushState({}, '', proPath(p)); else if (proIdFromPath()) window.history.pushState({}, '', PAGE_PATHS[page] || '/'); };
   const [group, setGroup] = useState(new Set()); const [groupOpen, setGroupOpen] = useState(false);
   const toggleGroup = id => setGroup(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else if (n.size >= 12) toast('A group can have up to 12 people.'); else n.add(id); return n; });
   const [auth, setAuth] = useState({ open: false, mode: 'login', role: null, next: null });
@@ -104,7 +113,7 @@ function Shell() {
 
   useEffect(() => {
     refreshProfessionals().catch(() => setPros([])).finally(() => setLoading(false));
-    http('/api/auth/me').then(({ data }) => setUser(data.user || null)).catch(() => setUser(null));
+    http('/api/auth/me').then(({ data }) => setUser(data.user || null)).catch(() => setUser(null)).finally(() => setAuthChecked(true));
   }, [refreshProfessionals]);
 
   const closeAuth = useCallback(() => setAuth(a => ({ ...a, open: false })), []);
@@ -126,7 +135,19 @@ function Shell() {
     if (!user) { openAuth('login', () => showPage('profile')); return; }
     showPage('profile');
   };
-  const showPage = p => { setPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const showPage = p => {
+    setViewingState(null); setPage(p);
+    const to = PAGE_PATHS[p] || '/';
+    if (location.pathname !== to) window.history.pushState({}, '', to);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  // Back / forward buttons, and opening a deep link such as /jobs or /crew/12-ada-obi
+  useEffect(() => {
+    const onPop = () => { setPage(pageFromPath()); const id = proIdFromPath(); setViewingState(id ? (pros.find(x => Number(x.id) === id) || null) : null); };
+    window.addEventListener('popstate', onPop); return () => window.removeEventListener('popstate', onPop);
+  }, [pros]);
+  useEffect(() => { const id = proIdFromPath(); if (id && !viewing && pros.length) setViewingState(pros.find(x => Number(x.id) === id) || null); }, [pros]);
+  useEffect(() => { if (authChecked && !user && PROTECTED.includes(page)) { showPage('marketplace'); openAuth('login'); } }, [authChecked]);
   // Switch between hiring and crew mode (one login, like Airbnb's guest/host toggle)
   async function ensureMode(mode, quiet = false) {
     if (user && user.accountType === mode) return true;
@@ -230,6 +251,6 @@ function Shell() {
   );
 }
 export default function App() {
-  const sheet = new URLSearchParams(location.search).get('sheet');
+  const sheet = new URLSearchParams(location.search).get('sheet') || (location.pathname.match(/^\/sheet\/([\w-]{8,})/) || [])[1];
   return sheet ? <CallSheetView token={sheet} /> : <ToastProvider><Shell /></ToastProvider>;
 }
