@@ -248,6 +248,19 @@ const statusStyle = { pending: 'bg-[#fff1d7] text-[#8b5c09]', accepted: 'bg-[#e3
 
 const Receipt = ({ seen }) => <span className={'mt-0.5 block text-[10px] font-bold ' + (seen ? 'text-[#2f7d4f]' : 'text-muted')} aria-label={seen ? 'Seen' : 'Sent'}>{seen ? '✓✓ Seen' : '✓ Sent'}</span>;
 
+function ContactCard({ thread }) {
+  const [c, setC] = useState(null);
+  useEffect(() => { setC(null); if (!['confirmed', 'in_progress', 'completion_review', 'completed'].includes(thread.status)) return; let live = true; http('/api/bookings/' + thread.id + '/contact').then(r => live && r.ok && setC(r.data)).catch(() => {}); return () => { live = false; }; }, [thread.id, thread.status]);
+  if (!c?.available) return null;
+  return (
+    <div className="border-t border-line bg-lime-soft/60 px-4 py-2.5 text-xs">
+      <p className="font-extrabold uppercase tracking-[.1em] text-[#4d6b14]">Booking confirmed · contact details</p>
+      <p className="mt-1 break-words text-sm"><strong>{c.name}</strong>{c.phone ? <> · <a className="font-bold underline" href={'tel:' + c.phone.replace(/[^+\d]/g, '')}>{c.phone}</a></> : <span className="text-muted"> · no phone number added yet, ask in the chat</span>}{c.email && <> · <a className="underline" href={'mailto:' + c.email}>{c.email}</a></>}</p>
+      <p className="mt-0.5 text-muted">Chat messages still hide numbers. Keep payments inside the app.</p>
+    </div>
+  );
+}
+
 function ActionBar({ thread, busy, panel, setPanel, onComplete, onInvoice, onPay, groupDue, onPayGroup }) {
   const role = thread.my_role, st = thread.status, paid = thread.payment_status === 'paid';
   const started = day(thread.start_date) <= new Date(Date.now() + 3600000).toISOString().slice(0, 10);
@@ -533,6 +546,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                       })}
                       {!messages.length && <p className="p-4 text-center text-xs text-muted">No messages yet. Start the conversation.</p>}
                     </div>
+                    <ContactCard thread={current} />
                     <ActionBar thread={current} busy={busy} panel={panel} setPanel={setPanel} onComplete={markComplete} onInvoice={showInvoice} onPay={payNow} groupDue={groupDue} onPayGroup={payGroup} />
                     {panel && panel !== 'invoice' && (
                       <form onSubmit={e => { e.preventDefault(); ({ cancel: cancelBooking, dispute: reportProblem, review: sendReview })[panel](); }} className="grid gap-2.5 border-t border-line bg-white p-3.5">

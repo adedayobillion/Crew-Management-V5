@@ -1851,6 +1851,18 @@ app.get('/api/bookings/:id/messages', requireUser, wrap(async (req, res) => {
   res.json(scrubMoney(rows, roleOf(req, b)));
 }));
 
+// Once a booking is confirmed, the two sides can see each other's contact details (never before).
+app.get('/api/bookings/:id/contact', requireUser, wrap(async (req, res) => {
+  const b = await getAccessibleBooking(pool, req, req.params.id);
+  if (!['confirmed', 'in_progress', 'completion_review', 'completed'].includes(b.status)) return res.json({ available: false });
+  let uid = null;
+  if (ownsBooking(req.user, b)) uid = (await crewUserIdsFor(pool, b.professional_id))[0] || null;
+  else uid = b.user_id != null ? Number(b.user_id) : null;
+  const u = uid ? (await pool.query('SELECT name, phone, email FROM users WHERE id = $1', [uid])).rows[0] : null;
+  if (!u) return res.json({ available: false });
+  res.json({ available: true, name: u.name || '', phone: u.phone || '', email: u.email || '' });
+}));
+
 // Live delivery: one Server-Sent Events stream per open chat, fed by an in-process subscriber map (single replica).
 const chatSubs = new Map();
 app.get('/api/bookings/:id/messages/stream', requireUser, wrap(async (req, res) => {
