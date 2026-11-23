@@ -507,6 +507,16 @@ async function initDb() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
       CREATE INDEX IF NOT EXISTS call_sheets_owner_idx ON call_sheets (owner_id);
+      CREATE TABLE IF NOT EXISTS job_posts (
+        id SERIAL PRIMARY KEY, owner_id INT NOT NULL, title VARCHAR(140) NOT NULL, category VARCHAR(40) NOT NULL, role VARCHAR(80),
+        description TEXT NOT NULL, location VARCHAR(120) NOT NULL, budget INT, start_date DATE NOT NULL, end_date DATE NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'open', hired_booking_id INT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS job_posts_status_idx ON job_posts (status, end_date);
+      CREATE TABLE IF NOT EXISTS job_applications (
+        id SERIAL PRIMARY KEY, job_id INT NOT NULL, user_id INT NOT NULL, professional_id INT NOT NULL, message TEXT, quote INT,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE (job_id, professional_id)
+      );
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS outcome VARCHAR(20);
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS resolved_by VARCHAR(80);
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP;
@@ -1045,6 +1055,8 @@ app.post('/api/account/delete', requireUser, authLimiter, wrap(async (req, res) 
     await db.query('DELETE FROM email_tokens WHERE user_id = $1', [req.user.id]);
     await db.query(`UPDATE crew_applications SET name = 'Deleted user', full_name = 'Deleted user', email = NULL, bio = NULL WHERE user_id = $1`, [req.user.id]);
     await db.query('DELETE FROM call_sheets WHERE owner_id = $1', [req.user.id]);
+    await db.query('DELETE FROM job_applications WHERE user_id = $1 OR job_id IN (SELECT id FROM job_posts WHERE owner_id = $1)', [req.user.id]);
+    await db.query('DELETE FROM job_posts WHERE owner_id = $1', [req.user.id]);
     await db.query(`UPDATE users SET name = 'Deleted user', email = $2, password_hash = $3, phone = NULL, location = NULL, bio = NULL, is_suspended = TRUE, email_verified = FALSE WHERE id = $1`,
       [req.user.id, 'deleted-' + req.user.id + '@deleted.invalid', await bcrypt.hash(crypto.randomBytes(24).toString('hex'), 10)]);
   });
@@ -2222,6 +2234,94 @@ function cleanSheet(b) {
   };
 }
 const sheetRow = r => ({ id: r.id, token: r.token, data: r.data, created_at: r.created_at, updated_at: r.updated_at });
+
+/* ============ Job board: bookers post what they need, crew pick what they can do ============ */
+const JOB_CATS = ['Camera', 'Production', 'Editing', 'Lighting', 'Sound', 'Creative'];
+const jobPublic = j => ({ id: j.id, title: j.title, category: j.category, role: j.role || '', description: j.description, location: j.location, budget: j.budget, start_date: j.start_date, end_date: j.end_date, status: j.status, created_at: j.created_at, applicants: Number(j.applicants || 0), applied: !!j.applied, mine: !!j.mine });
+async function loadJobs(where, params, uid) {
+  const { rows } = await pool.query(
+    `SELECT j.*, (SELECT COUNT(*) FROM job_applications a WHERE a.job_id = j.id) AS applicants,
+            ${uid ? 'EXISTS(SELECT 1 FROM job_applications a WHERE a.job_id = j.id AND a.user_id = ' + Number(uid) + ')' : 'FALSE'} AS applied,
+            ${uid ? '(j.owner_id = ' + Number(uid) + ')' : 'FALSE'} AS mine
+       FROM job_posts j WHERE ${where} ORDER BY j.created_at DESC LIMIT 100`, params);
+  return rows.map(jobPublic);
+}
+app.get('/api/jobs', wrap(async (req, res) => {
+  const user = await loadUser(req).catch(() => null);
+  const cat = str(req.query.category, 40), q = str(req.query.q, 60).toLowerCase();
+  const jobs = await loadJobs(`j.status = 'open' AND j.end_date >= $1::date AND ($2::text = '' OR j.category = $2::text) AND ($3::text = '' OR LOWER(j.title || ' ' || j.location || ' ' || COALESCE(j.role,'')) LIKE '%' || $3::text || '%')`, [todayLagos(), cat, q], user?.id);
+  res.json({ jobs });
+}));
+app.post('/api/jobs', requireUser, requireApproved, requireVerifiedEmail, wrap(async (req, res) => {
+  const b = req.body || {};
+  if (!profileComplete(req.user)) fail(400, 'Please complete your profile (full name, phone and location) before posting a job.');
+  const title = str(b.title, 140), role = str(b.role, 80), description = str(b.description, 3000), location = str(b.location, 120);
+  const category = JOB_CATS.includes(b.category) ? b.category : '';
+  const budget = b.budget === '' || b.budget == null ? null : Number(b.budget);
+  if (title.length < 4) fail(400, 'Give the job a clear title.');
+  if (!category) fail(400, 'Choose a category.');
+  if (description.length < 20) fail(400, 'Describe the scope of work in a few sentences so crew know what to expect.');
+  if (location.length < 2) fail(400, 'Add the shoot location.');
+  if (budget != null && (!Number.isSafeInteger(budget) || budget < 1000 || budget > 100000000)) fail(400, 'Enter the budget as a whole number of naira.');
+  if (!isDate(b.startDate) || !isDate(b.endDate) || b.endDate < b.startDate) fail(400, 'Choose valid start and end dates.');
+  if (b.startDate < todayLagos()) fail(400, 'The start date cannot be in the past.');
+  const open = await pool.query(`SELECT COUNT(*)::int AS n FROM job_posts WHERE owner_id = $1 AND status = 'open'`, [req.user.id]);
+  if (open.rows[0].n >= 10) fail(429, 'You can have up to 10 open jobs at a time. Close one first.');
+  const r = await pool.query(`INSERT INTO job_posts (owner_id, title, category, role, description, location, budget, start_date, end_date) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [req.user.id, title, category, role, description, location, budget, b.startDate, b.endDate]);
+  res.status(201).json({ job: jobPublic({ ...r.rows[0], mine: true }) });
+}));
+app.post('/api/jobs/:id/apply', requireUser, requireApproved, requireVerifiedEmail, wrap(async (req, res) => {
+  const b = req.body || {};
+  const job = (await pool.query(`SELECT * FROM job_posts WHERE id = $1`, [toInt(req.params.id) || 0])).rows[0];
+  if (!job || job.status !== 'open') fail(404, 'This job is no longer open.');
+  if (job.owner_id === req.user.id) fail(400, 'You cannot apply to your own job.');
+  const mine = await crewProfessionalIds(pool, req.user);
+  const proId = toInt(b.professionalId) || mine[0];
+  if (!proId || !mine.includes(proId)) fail(403, 'Publish a crew profile first, then you can apply to jobs.');
+  const pro = (await pool.query(`SELECT name FROM professionals WHERE id = $1 AND status = 'approved' AND is_active = TRUE`, [proId])).rows[0];
+  if (!pro) fail(403, 'Your crew profile must be approved and active to apply.');
+  const message = str(b.message, 1500), quote = b.quote === '' || b.quote == null ? null : Number(b.quote);
+  if (message.length < 10) fail(400, 'Tell the booker why you are a good fit (a few words is fine).');
+  if (quote != null && (!Number.isSafeInteger(quote) || quote < 1 || quote > 100000000)) fail(400, 'Enter your quote as a whole number of naira.');
+  try { await pool.query(`INSERT INTO job_applications (job_id, user_id, professional_id, message, quote) VALUES ($1,$2,$3,$4,$5)`, [job.id, req.user.id, proId, message, quote]); }
+  catch (e) { if (e.code === '23505') fail(409, 'You have already applied to this job.'); throw e; }
+  emailUsers([job.owner_id], pro.name + ' applied to "' + job.title + '"', ['A crew member is interested in your job post.', 'Open your job board to review their message and accept.'], '/', 'job-app-' + job.id).catch(() => {});
+  res.status(201).json({ success: true });
+}));
+app.get('/api/my/jobs', requireUser, wrap(async (req, res) => {
+  const jobs = await loadJobs('j.owner_id = $1', [req.user.id], req.user.id);
+  const apps = (await pool.query(
+    `SELECT a.id, a.job_id, a.professional_id, a.message, a.quote, a.status, a.created_at, p.name, p.role, p.rate, p.rate_unit
+       FROM job_applications a JOIN professionals p ON p.id = a.professional_id JOIN job_posts j ON j.id = a.job_id WHERE j.owner_id = $1 ORDER BY a.created_at`, [req.user.id])).rows;
+  const applied = (await pool.query(
+    `SELECT a.id, a.job_id, a.status, a.quote, j.title, j.location FROM job_applications a JOIN job_posts j ON j.id = a.job_id WHERE a.user_id = $1 ORDER BY a.created_at DESC LIMIT 50`, [req.user.id])).rows;
+  res.json({ jobs: jobs.map(j => ({ ...j, applications: apps.filter(a => a.job_id === j.id) })), applied });
+}));
+app.post('/api/jobs/:id/close', requireUser, wrap(async (req, res) => {
+  const r = await pool.query(`UPDATE job_posts SET status = 'closed' WHERE id = $1 AND owner_id = $2 AND status = 'open' RETURNING id`, [toInt(req.params.id) || 0, req.user.id]);
+  if (!r.rows.length) fail(404, 'Job not found.');
+  res.json({ success: true });
+}));
+// Accepting an applicant opens a normal booking request (same chat, payment and protections as any booking).
+app.post('/api/jobs/:id/applications/:appId/accept', requireUser, requireApproved, requireVerifiedEmail, wrap(async (req, res) => {
+  const out = await withTx(async db => {
+    const job = (await db.query(`SELECT * FROM job_posts WHERE id = $1 AND owner_id = $2 FOR UPDATE`, [toInt(req.params.id) || 0, req.user.id])).rows[0];
+    if (!job || job.status !== 'open') fail(404, 'This job is not open.');
+    const app_ = (await db.query(`SELECT * FROM job_applications WHERE id = $1 AND job_id = $2`, [toInt(req.params.appId) || 0, job.id])).rows[0];
+    if (!app_) fail(404, 'Application not found.');
+    const ds = v => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10));
+    const note = 'Job: ' + job.title + '\n' + job.description + (app_.quote ? '\n\nYour quote: ₦' + Number(app_.quote).toLocaleString('en-NG') + ' (agree the final price in this chat).' : '');
+    const body = { startDate: ds(job.start_date), endDate: ds(job.end_date), quantity: 8 };
+    const r = await createBookingRequest(db, req.user, app_.professional_id, body, note.slice(0, 2000), null);
+    await db.query(`UPDATE job_applications SET status = CASE WHEN id = $1 THEN 'accepted' ELSE 'declined' END WHERE job_id = $2`, [app_.id, job.id]);
+    await db.query(`UPDATE job_posts SET status = 'filled', hired_booking_id = $1 WHERE id = $2`, [r.booking.id, job.id]);
+    return r;
+  });
+  pushChat(out.booking, out.msg, out.crewId, req.user);
+  res.status(201).json({ success: true, booking: scrubMoney(out.booking, 'client') });
+}));
+
 async function ownSheet(req) {
   const r = (await pool.query('SELECT * FROM call_sheets WHERE id = $1 AND owner_id = $2', [toInt(req.params.id) || 0, req.user.id])).rows[0];
   if (!r) fail(404, 'Call sheet not found.');
