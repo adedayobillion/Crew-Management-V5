@@ -71,7 +71,7 @@ app.use((req, res, next) => {
 });
 app.use((req, res, next) => { res.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()'); next(); });
 app.use('/api/', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); }); // personal data is never cached by browsers or proxies
-app.use('/api/', rateLimit({ windowMs: 15 * 60 * 1000, limit: 300, standardHeaders: 'draft-7', legacyHeaders: false }));
+app.use('/api/', rateLimit({ windowMs: 15 * 60 * 1000, limit: 1500, standardHeaders: 'draft-7', legacyHeaders: false, skip: (req) => req.path.endsWith('/stream') })); // SSE reconnects must not eat the shared budget that login depends on
 app.use(express.static(path.join(__dirname, 'dist'), { dotfiles: 'ignore', index: false }));
 
 /* ---------------- helpers ---------------- */
