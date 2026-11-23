@@ -1194,7 +1194,7 @@ const isoDate = v => { const x = String(v || ''); if (!/^\d{4}-\d{2}-\d{2}$/.tes
 const listingView = p => ({ id: p.id, role: p.role, category: p.category || '', location: p.location || '', bio: p.bio || '', skills: p.skills || [], showreel: p.showreel || '', rate: Number(p.rate) || 0, rate_unit: rateUnitOf(p.rate_unit), photo: p.photo || '', is_active: p.is_active !== false, status: p.status });
 app.get('/api/crew/listing', requireUser, wrap(async (req, res) => {
   const ids = await crewProfessionalIds(pool, req.user);
-  const rows = ids.length ? (await pool.query('SELECT * FROM professionals WHERE id = ANY($1::int[]) ORDER BY id', [ids])).rows : [];
+  const rows = ids.length ? (await pool.query("SELECT * FROM professionals WHERE id = ANY($1::int[]) AND COALESCE(status,'') <> 'removed' ORDER BY id", [ids])).rows : [];
   const blocks = (await pool.query(`SELECT id, professional_id, start_date::text AS start_date, end_date::text AS end_date, reason FROM availability_blocks WHERE professional_id = ANY($1::int[]) AND end_date >= $2::date ORDER BY start_date`, [ids, todayLagos()])).rows;
   const listings = rows.map(listingView);
   res.json({ listings, listing: listings[0] || null, blocks });
@@ -1231,6 +1231,19 @@ async function updateCrewListing(req, res, listingId) {
   const row = (await pool.query(`UPDATE professionals SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING *`, vals)).rows[0];
   res.json({ success: true, listing: listingView(row) });
 }
+// Delete a listing. Past bookings, invoices and reviews keep their history, so the row is retired (hidden everywhere) instead of erased.
+app.delete('/api/crew/listings/:id', requireUser, wrap(async (req, res) => {
+  const p = await myListing(pool, req.user, req.params.id);
+  const live = await pool.query(`SELECT COUNT(*)::int AS n FROM bookings WHERE professional_id = $1 AND status IN ('awaiting_review','pending','counter_pending','confirmed','in_progress','completion_review')`, [p.id]);
+  if (live.rows[0].n > 0) fail(409, 'You have ' + live.rows[0].n + ' open booking(s) on this listing. Finish or cancel them first, or pause the listing instead.');
+  await withTx(async db => {
+    await db.query('DELETE FROM portfolio_items WHERE professional_id = $1', [p.id]);
+    await db.query('DELETE FROM professional_photos WHERE professional_id = $1', [p.id]);
+    await db.query('DELETE FROM availability_blocks WHERE professional_id = $1', [p.id]);
+    await db.query(`UPDATE professionals SET status = 'removed', is_active = FALSE WHERE id = $1`, [p.id]);
+  });
+  res.json({ success: true });
+}));
 app.patch('/api/crew/listing', requireUser, wrap(async (req, res) => updateCrewListing(req, res, null)));
 app.patch('/api/crew/listings/:id', requireUser, wrap(async (req, res) => updateCrewListing(req, res, req.params.id)));
 app.post('/api/crew/listings', requireUser, requireVerifiedEmail, wrap(async (req, res) => {

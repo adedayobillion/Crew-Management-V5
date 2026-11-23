@@ -359,3 +359,12 @@ test('job board: post, apply, owner-only review, accept opens a booking', async 
   assert.ok(acc.body.booking.id, 'accepting opens a booking request');
   assert.equal((await agent().get('/api/jobs')).body.jobs.some(j => j.id === id), false, 'filled jobs leave the board');
 });
+
+test('crew can delete a listing, unless it has open bookings', async () => {
+  const c = await register('Del Crew', 'crew'); await pool.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [c.id]); const p = await c.a.post('/api/crew/listings', { role: 'Gaffer', category: 'Lighting', location: 'Lagos', rate: 50000, bio: 'Lighting for film sets.', skills: ['LED'] });
+  assert.equal(p.status, 201, JSON.stringify(p.body)); const id = p.body.listing.id;
+  assert.equal((await client.a.del('/api/crew/listings/' + id)).status >= 400, true, 'only the owner deletes');
+  const d = await c.a.del('/api/crew/listings/' + id); assert.equal(d.status, 200, JSON.stringify(d.body));
+  assert.equal((await c.a.get('/api/crew/listing')).body.listings.some(l => l.id === id), false, 'gone from the crew dashboard');
+  assert.equal((await agent().get('/api/professionals')).body.professionals.some(x => x.id === id), false, 'gone from the marketplace');
+});
