@@ -718,7 +718,11 @@ function parseCookies(req) {
 function setSessionCookie(res, token) {
   res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: SESSION_DAYS * 86400000, path: '/' });
 }
+const PHONE_RE = /^\+?[0-9][0-9\s\-().]{6,22}[0-9]$/;
+const nameOk = n => String(n || '').trim().length >= 3 && String(n).trim().split(/\s+/).length >= 2;
+const profileComplete = u => nameOk(u.name) && PHONE_RE.test(String(u.phone || '')) && String(u.location || '').trim().length >= 2;
 const publicUser = u => ({
+  profileComplete: profileComplete(u),
   id: u.id, name: u.name, email: u.email,
   phone: u.phone || '', location: u.location || '', bio: u.bio || '',
   accountType: u.account_type, accountStatus: u.account_status, isVerified: !!u.is_verified,
@@ -855,7 +859,9 @@ app.get('/api/profile', requireUser, wrap(async (req, res) => {
 }));
 app.patch('/api/profile', requireUser, wrap(async (req, res) => {
   const name = str(req.body.name,120), phone = str(req.body.phone,40), location = str(req.body.location,120), bio = str(req.body.bio,1000);
-  if (name.length < 2) fail(400, 'Please enter your full name.');
+  if (!nameOk(name)) fail(400, 'Please enter your full name as it appears on your government ID (first and last name).');
+  if (!PHONE_RE.test(phone)) fail(400, 'Please enter a valid phone number, for example +234 801 234 5678.');
+  if (location.length < 2) fail(400, 'Please enter your location, for example Lagos.');
   const rows = await withTx(async db => {
     const updated = await db.query('UPDATE users SET name=$1,phone=$2,location=$3,bio=$4 WHERE id=$5 RETURNING *',
       [name, phone || null, location || null, bio || null, req.user.id]);
