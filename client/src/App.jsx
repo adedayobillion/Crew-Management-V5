@@ -113,7 +113,17 @@ function Shell() {
 
   useEffect(() => {
     refreshProfessionals().catch(() => setPros([])).finally(() => setLoading(false));
-    http('/api/auth/me').then(({ data }) => setUser(data.user || null)).catch(() => setUser(null)).finally(() => setAuthChecked(true));
+    // Only a real answer from the server decides signed-in vs signed-out. A 429/5xx/network error is not "logged out": retry instead.
+    (async () => {
+      for (let i = 0; i < 5; i++) {
+        try {
+          const r = await http('/api/auth/me');
+          if (r.ok) { setUser(r.data.user || null); break; }
+        } catch {}
+        await new Promise(res => setTimeout(res, 1500 * (i + 1)));
+      }
+      setAuthChecked(true);
+    })();
   }, [refreshProfessionals]);
 
   const closeAuth = useCallback(() => setAuth(a => ({ ...a, open: false })), []);
