@@ -6,6 +6,7 @@ import { Banner, COVERS, CrewDashboard, Dashboard, Discover, Footer, Hero, How, 
 import { ScrollProgress, ToastProvider, useToast } from './ui.jsx';
 import { http, postJSON } from './lib.js';
 import { CallSheetTool, CallSheetView } from './CallSheet.jsx';
+import { JobBoard } from './JobBoard.jsx';
 import { Mail } from 'lucide-react';
 
 function Shell() {
@@ -165,7 +166,7 @@ function Shell() {
   return (
     <>
       <ScrollProgress />
-      <Nav user={user} onLogin={() => openAuth('login')} onLogout={logout} onDashboard={openDashboard} onCrewDashboard={openCrewDashboard} onSwitch={switchMode} onHome={() => showPage('marketplace')} onJoin={openJoin} onProfile={openProfile} onMessages={() => openInbox()} onTools={() => showPage('tools')} unreadCount={unreadMessages} />
+      <Nav user={user} onLogin={() => openAuth('login')} onLogout={logout} onDashboard={openDashboard} onCrewDashboard={openCrewDashboard} onSwitch={switchMode} onHome={() => showPage('marketplace')} onJoin={openJoin} onProfile={openProfile} onMessages={() => openInbox()} onTools={() => showPage('tools')} onJobs={() => showPage('jobs')} unreadCount={unreadMessages} />
       {user && user.emailEnabled && user.emailVerified === false && (
         <div role="status" className="border-b border-[#f1dfae] bg-[#fff8e6] px-4 py-2 text-center text-xs font-semibold text-[#7a5a0b]">
           Please confirm your email address to book crew or accept bookings.{' '}
@@ -188,12 +189,13 @@ function Shell() {
               <How /><Trust /><Banner onJoin={openJoin} />
             </div>
           ) : page === 'profile' ? <ProfilePage key="profile" user={user} onBack={() => showPage('marketplace')} onUserUpdated={profile => { setUser(profile); refreshProfessionals(); }} onSignedOut={() => { setUser(null); showPage('marketplace'); toast('Your account has been deleted.'); }} onSettingsUpdated={settings => { setMessagePopupsEnabled(settings.message_popups !== false); refreshProfessionals(); }} />
+          : page === 'jobs' ? <JobBoard key="j" user={user} toast={toast} onLogin={() => openAuth('login', () => showPage('jobs'))} onBack={() => showPage('marketplace')} onOpenMessages={() => openInbox()} />
           : page === 'tools' ? <CallSheetTool key="t" user={user} toast={toast} onLogin={() => openAuth('login', () => showPage('tools'))} onBack={() => showPage('marketplace')} />
           : page === 'crew' ? <CrewDashboard key="c" onBack={() => showPage('marketplace')} onJoin={openJoin} toast={toast} user={user} onMessages={openInbox} />
           : <Dashboard key="d" onBack={() => showPage('marketplace')} onJoin={openJoin} toast={toast} user={user} onMessages={openInbox} />}
         </AnimatePresence>
       </main>
-      <Footer openLegal={setLegal} onTools={() => showPage('tools')} />
+      <Footer openLegal={setLegal} onTools={() => showPage('tools')} onJobs={() => showPage('jobs')} />
       <ResetModal token={resetToken} onClose={() => setResetToken('')} onDone={() => { setResetToken(''); setUser(null); toast('Password updated. Please log in with your new password.'); openAuth('login'); }} />
       <AuthModal open={auth.open} mode={auth.mode} setMode={m => setAuth(a => ({ ...a, mode: m }))} defaultRole={auth.role} onClose={closeAuth} onSuccess={onAuthed} openLegal={setLegal} />
       <GroupModal pros={groupOpen ? pros.filter(p => group.has(p.id)) : []} user={user} onClose={() => setGroupOpen(false)} onNeedAuth={() => { setGroupOpen(false); openAuth('login', () => setGroupOpen(true)); }}

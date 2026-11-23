@@ -322,3 +322,22 @@ test('existing accounts without a phone or location are flagged and must complet
   const ok = await u.a.patch('/api/profile', { name: 'Legacy Person', phone: '+234 802 000 1111', location: 'Abuja' });
   assert.equal(ok.status, 200); assert.equal(ok.body.user.profileComplete, true);
 });
+
+test('job board: post, apply, owner-only review, accept opens a booking', async () => {
+  const job = { title: 'Wedding highlight film', category: 'Camera', role: 'Videographer', description: 'Two-camera coverage of a Lagos wedding, 8 hours on the day.', location: 'Lagos', budget: 150000, startDate: tomorrow(60), endDate: tomorrow(60) };
+  assert.equal((await agent().post('/api/jobs', job)).status, 401);
+  assert.equal((await client.a.post('/api/jobs', { ...job, description: 'short' })).status, 400);
+  assert.equal((await client.a.post('/api/jobs', { ...job, category: 'Nope' })).status, 400);
+  const p = await client.a.post('/api/jobs', job); assert.equal(p.status, 201, JSON.stringify(p.body)); const id = p.body.job.id;
+  const board = await agent().get('/api/jobs'); assert.ok(board.body.jobs.some(j => j.id === id), 'public board lists open jobs');
+  assert.equal(JSON.stringify(board.body).includes('owner'), false, 'no owner details on the public board');
+  assert.equal((await client.a.post(`/api/jobs/${id}/apply`, { message: 'I would love to shoot this.' })).status, 400, 'owners cannot apply to their own job');
+  assert.equal((await crew.a.post(`/api/jobs/${id}/apply`, { message: 'x' })).status, 400);
+  assert.equal((await crew.a.post(`/api/jobs/${id}/apply`, { message: 'I have shot 40 weddings in Lagos.', quote: 140000 })).status, 201);
+  assert.equal((await crew.a.post(`/api/jobs/${id}/apply`, { message: 'I have shot 40 weddings in Lagos.' })).status, 409, 'one application per job');
+  const mine = await client.a.get('/api/my/jobs'); const app = mine.body.jobs.find(j => j.id === id).applications[0]; assert.equal(app.quote, 140000);
+  assert.equal((await crew.a.post(`/api/jobs/${id}/applications/${app.id}/accept`, {})).status, 404, 'only the owner can accept');
+  const acc = await client.a.post(`/api/jobs/${id}/applications/${app.id}/accept`, {}); assert.equal(acc.status, 201, JSON.stringify(acc.body));
+  assert.ok(acc.body.booking.id, 'accepting opens a booking request');
+  assert.equal((await agent().get('/api/jobs')).body.jobs.some(j => j.id === id), false, 'filled jobs leave the board');
+});
