@@ -29,7 +29,7 @@ function Tile({ it, onOpen }) {
 }
 
 /* Instagram-style profile: header, stats, work grid, reviews. */
-export function ProfileDrawer({ pro, onClose, onBook }) {
+export function ProfileDrawer({ pro, onClose, onBook }) {  // onBook omitted: no booking button
   const [tab, setTab] = useState('work'); const [items, setItems] = useState(null); const [reviews, setReviews] = useState(null); const [open, setOpen] = useState(null);
   useEffect(() => {
     let live = true;
@@ -41,7 +41,7 @@ export function ProfileDrawer({ pro, onClose, onBook }) {
   const avg = reviews?.length ? reviews.reduce((a, r) => a + r.rating, 0) / reviews.length : null;
   const stat = (n, l) => <div className="text-center"><p className="font-display text-lg font-extrabold leading-none">{n}</p><p className="mt-1 text-[11px] text-muted">{l}</p></div>;
   return (
-    <motion.div className="fixed inset-0 z-[70] flex justify-end bg-black/50" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={e => e.target === e.currentTarget && onClose()}>
+    <motion.div className="fixed inset-0 z-[100] flex justify-end bg-black/50" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={e => e.target === e.currentTarget && onClose()}>
       <motion.aside role="dialog" aria-modal="true" aria-label={pro.name + ' profile'} initial={{ x: 60 }} animate={{ x: 0 }} className="flex h-full w-full max-w-[520px] flex-col overflow-hidden bg-[#fbfcfa]">
         <div className="flex items-center justify-between border-b border-line bg-white px-4 py-3"><strong className="truncate font-display">{pro.name}</strong><button aria-label="Close profile" onClick={onClose} className="grid size-8 place-items-center rounded-full hover:bg-[#f0f3f4]"><X className="size-4" /></button></div>
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
@@ -54,7 +54,7 @@ export function ProfileDrawer({ pro, onClose, onBook }) {
             <p className="text-sm text-muted">{pro.role} · {pro.location}</p>
             {pro.desc && <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-[#445468]">{pro.bio || pro.desc}</p>}
             {pro.skills?.length > 0 && <div className="mt-2.5 flex flex-wrap gap-1.5">{pro.skills.map(s => <span key={s} className="rounded-md bg-[#f0f3f4] px-2 py-1 text-[11px] text-[#566274]">{s}</span>)}</div>}
-            <div className="mt-3.5 flex items-center justify-between gap-3"><div><strong className="font-display text-lg">{naira(pro.rate)}</strong><small className="block text-[11px] text-muted">{pro.rate_unit === 'hour' ? 'per hour' : pro.rate_unit === 'project' ? 'per project' : 'per day'}</small></div><Button variant="dark" onClick={() => onBook(pro)}>Request booking</Button></div>
+            <div className="mt-3.5 flex items-center justify-between gap-3"><div><strong className="font-display text-lg">{naira(pro.rate)}</strong><small className="block text-[11px] text-muted">{pro.rate_unit === 'hour' ? 'per hour' : pro.rate_unit === 'project' ? 'per project' : 'per day'}</small></div>{onBook && <Button variant="dark" onClick={() => onBook(pro)}>Request booking</Button>}</div>
           </div>
           <div className="sticky top-0 z-[1] flex border-y border-line bg-white" role="tablist">{[['work', 'Work'], ['reviews', 'Reviews']].map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={cn('flex-1 border-b-2 py-2.5 text-sm font-extrabold', tab === k ? 'border-ink text-ink' : 'border-transparent text-muted')}>{l}</button>)}</div>
           {tab === 'work' ? (items === null ? <p className="p-4 text-sm text-muted">Loading…</p> : items.length ? <div className="grid grid-cols-3 gap-0.5 p-0.5">{items.map(it => <Tile key={it.id} it={it} onOpen={setOpen} />)}</div> : <p className="p-8 text-center text-sm text-muted">No portfolio items yet.</p>)
@@ -62,7 +62,7 @@ export function ProfileDrawer({ pro, onClose, onBook }) {
         </div>
         <AnimatePresence>
           {open && (
-            <motion.div className="fixed inset-0 z-[80] grid place-items-center bg-black/85 p-3" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setOpen(null)}>
+            <motion.div className="fixed inset-0 z-[110] grid place-items-center bg-black/85 p-3" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setOpen(null)}>
               <button aria-label="Close" className="absolute right-4 top-4 grid size-9 place-items-center rounded-full bg-white/90"><X className="size-4" /></button>
               <div className="w-full max-w-[860px]" onClick={e => e.stopPropagation()}>
                 {open.kind === 'image' ? <img src={open.url} alt={open.caption} className="mx-auto max-h-[82vh] max-w-full rounded-lg object-contain" /> : <div className="aspect-video w-full overflow-hidden rounded-lg bg-black"><iframe title={open.caption || 'Video'} className="size-full" src={ytId(open.url) ? 'https://www.youtube-nocookie.com/embed/' + ytId(open.url) : 'https://player.vimeo.com/video/' + vimeoId(open.url)} allow="encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" /></div>}
@@ -80,7 +80,7 @@ export function ClientProfileModal({ bookingId, onClose }) {
   const [d, setD] = useState(null); const [err, setErr] = useState('');
   useEffect(() => { http('/api/bookings/' + bookingId + '/client-profile').then(r => (r.ok ? setD(r.data) : setErr(r.data.error || 'Could not load this profile.'))).catch(() => setErr('Could not load this profile.')); }, [bookingId]);
   return (
-    <div className="fixed inset-0 z-[70] grid place-items-center bg-black/50 p-3" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+    <div className="fixed inset-0 z-[100] grid place-items-center bg-black/50 p-3" onMouseDown={e => e.target === e.currentTarget && onClose()}>
       <div role="dialog" aria-modal="true" aria-label="Client profile" className="max-h-[85vh] w-full max-w-[440px] overflow-y-auto rounded-2xl bg-white">
         <div className="flex items-center justify-between border-b border-line px-4 py-3"><strong className="font-display">Client profile</strong><button aria-label="Close" onClick={onClose} className="grid size-8 place-items-center rounded-full hover:bg-[#f0f3f4]"><X className="size-4" /></button></div>
         {err && <p className="p-5 text-sm text-[#a33]">{err}</p>}

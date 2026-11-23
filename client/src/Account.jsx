@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Button, Field, Tagline, inputCls } from './ui.jsx';
 import { http, naira, postJSON, proposalBody } from './lib.js';
 import { ProposalFields } from './modals.jsx';
-import { ClientProfileModal } from './Profile.jsx';
+import { ClientProfileModal, ProfileDrawer } from './Profile.jsx';
 import { ArrowLeft, CalendarClock, Check, CreditCard, FileText, Star, X } from 'lucide-react';
 
 const documentLabels = {
@@ -337,6 +337,13 @@ function OfferCard({ message, thread, busy, onRespond }) {
 }
 
 export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) {
+  const [proView, setProView] = useState(null);
+  async function viewCrew(id) {
+    const r = await http('/api/professionals').catch(() => ({ ok: false, data: {} }));
+    const p = (r.data.professionals || []).find(x => Number(x.id) === Number(id));
+    if (!p) { setError('This crew profile is not listed right now.'); return; }
+    setProView({ id: Number(p.id), name: p.name, role: p.role, category: p.category, location: p.location, photo: p.photo || '', rate: Number(p.rate), rate_unit: p.rate_unit || 'day', desc: p.desc, skills: Array.isArray(p.skills) ? p.skills : [], cover: 'linear-gradient(135deg,#2a4f6b,#172337)', symbol: (p.name || '?')[0] });
+  }
   const [threads, setThreads] = useState([]);
   const [selected, setSelected] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -543,7 +550,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
                       <button type="button" onClick={onClose} className="rounded-lg px-2.5 py-2 text-sm font-bold text-muted active:bg-[#edf1f5]">Close</button>
                     </div>
                     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-line px-4 py-3">
-                      <div><strong className="text-sm">{current.my_role === 'client' ? current.professional_name : current.client_name}</strong><span className="ml-2 text-[11px] text-muted">{current.reference}{current.group_title ? ' · Group: ' + current.group_title : ''}</span></div>
+                      <div>{current.my_role === 'client' && current.professional_id ? <button type="button" onClick={() => viewCrew(current.professional_id)} className="text-sm font-bold underline decoration-dotted underline-offset-2 hover:text-[#4d6f12]" title="View profile and portfolio">{current.professional_name}</button> : <strong className="text-sm">{current.my_role === 'client' ? current.professional_name : current.client_name}</strong>}{current.my_role === 'client' && current.professional_id && <button type="button" onClick={() => viewCrew(current.professional_id)} className="ml-2 rounded-full border border-line px-2 py-0.5 text-[10px] font-extrabold hover:border-ink/30">View profile</button>}<span className="ml-2 text-[11px] text-muted">{current.reference}{current.group_title ? ' · Group: ' + current.group_title : ''}</span></div>
                       <div className="flex flex-wrap items-center gap-2 text-xs">
                         <span className="text-muted">{current.schedule_kind === 'delivery' ? 'Deliver by ' : ''}{day(current.start_date)}{current.schedule_kind !== 'delivery' && day(current.end_date) !== day(current.start_date) ? ' to ' + day(current.end_date) : ''}{current.booking_unit === 'half' ? ' · half day' : current.booking_unit === 'hour' ? ' · ' + Number(current.quantity) + ' hr' : current.booking_unit === 'project' ? ' · flat fee' : ''}</span>
                         <strong>{naira(current.my_role === 'crew' ? current.crew_net : current.client_total)}</strong>
@@ -600,6 +607,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
           </motion.section>
         </motion.div>
       )}
+      {proView && <ProfileDrawer key="pv" pro={proView} onClose={() => setProView(null)} />}
     </AnimatePresence>
   );
 }
