@@ -5,6 +5,7 @@ import { Button, inputCls } from './ui.jsx';
 import { cn, http, naira, postJSON } from './lib.js';
 
 const ytId = u => { try { const x = new URL(u); if (/youtu\.be$/.test(x.hostname)) return x.pathname.slice(1); if (/youtube\.com$/.test(x.hostname)) return x.searchParams.get('v') || (x.pathname.match(/\/(shorts|embed)\/([\w-]{6,})/) || [])[2] || ''; } catch { /* ignore */ } return ''; };
+const vimeoId = u => { try { return (new URL(u).pathname.match(/\/(\d{5,})/) || [])[1] || ''; } catch { return ''; } };
 const host = u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return 'link'; } };
 const monthYear = d => { try { return new Date(d).toLocaleDateString('en-NG', { month: 'short', year: 'numeric' }); } catch { return ''; } };
 
@@ -23,7 +24,8 @@ function Tile({ it, onOpen }) {
   const base = 'group relative aspect-square overflow-hidden bg-[#e9eef0]';
   if (it.kind === 'image') return <button type="button" className={base} onClick={() => onOpen(it)} aria-label={it.caption || 'Open photo'}><img src={it.url} alt={it.caption} loading="lazy" className="size-full object-cover transition-transform duration-300 group-hover:scale-105" /></button>;
   if (id) return <button type="button" className={base} onClick={() => onOpen(it)} aria-label={'Play video ' + it.caption}><img src={'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg'} alt="" loading="lazy" className="size-full object-cover" /><span className="absolute inset-0 grid place-items-center bg-black/20"><span className="grid size-10 place-items-center rounded-full bg-white/90"><Play className="size-4 fill-ink text-ink" /></span></span></button>;
-  return <a href={it.url} target="_blank" rel="noopener noreferrer nofollow" className={cn(base, 'grid place-items-center bg-ink p-2 text-center text-[11px] font-bold text-white')}><span><Play className="mx-auto mb-1 size-5" />{host(it.url)}</span></a>;
+  if (vimeoId(it.url)) return <button type="button" className={cn(base, 'grid place-items-center bg-ink text-white')} onClick={() => onOpen(it)} aria-label={'Play video ' + it.caption}><span className="grid size-10 place-items-center rounded-full bg-white/90"><Play className="size-4 fill-ink text-ink" /></span></button>;
+  return null;
 }
 
 /* Instagram-style profile: header, stats, work grid, reviews. */
@@ -63,7 +65,7 @@ export function ProfileDrawer({ pro, onClose, onBook }) {
             <motion.div className="fixed inset-0 z-[80] grid place-items-center bg-black/85 p-3" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setOpen(null)}>
               <button aria-label="Close" className="absolute right-4 top-4 grid size-9 place-items-center rounded-full bg-white/90"><X className="size-4" /></button>
               <div className="w-full max-w-[860px]" onClick={e => e.stopPropagation()}>
-                {open.kind === 'image' ? <img src={open.url} alt={open.caption} className="mx-auto max-h-[82vh] max-w-full rounded-lg object-contain" /> : <div className="aspect-video w-full overflow-hidden rounded-lg bg-black"><iframe title={open.caption || 'Video'} className="size-full" src={'https://www.youtube-nocookie.com/embed/' + ytId(open.url)} allow="encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" /></div>}
+                {open.kind === 'image' ? <img src={open.url} alt={open.caption} className="mx-auto max-h-[82vh] max-w-full rounded-lg object-contain" /> : <div className="aspect-video w-full overflow-hidden rounded-lg bg-black"><iframe title={open.caption || 'Video'} className="size-full" src={ytId(open.url) ? 'https://www.youtube-nocookie.com/embed/' + ytId(open.url) : 'https://player.vimeo.com/video/' + vimeoId(open.url)} allow="encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" /></div>}
                 {open.caption && <p className="mt-2 text-center text-sm text-white">{open.caption}</p>}
               </div>
             </motion.div>)}
@@ -110,10 +112,10 @@ export function PortfolioManager({ listingId, toast }) {
   async function del(it) { const r = await http('/api/crew/listings/' + listingId + '/portfolio/' + it.id, { method: 'DELETE' }).catch(() => ({ ok: false })); toast(r.ok ? 'Removed.' : 'Could not remove it.'); load(); }
   return (
     <div className="mt-4 rounded-xl border border-line p-3.5">
-      <p className="font-display font-extrabold">Portfolio</p><p className="text-xs text-muted">Photos and video links appear on your profile as a grid, like Instagram. Up to 24 items.</p>
+      <p className="font-display font-extrabold">Portfolio</p><p className="text-xs text-muted">Photos and videos play inside your profile as a grid, like Instagram. Up to 24 items.</p>
       <div className="mt-3 grid grid-cols-4 gap-1.5 sm:grid-cols-6">{items?.map(it => <div key={it.id} className="group relative aspect-square overflow-hidden rounded-md bg-[#e9eef0]">{it.kind === 'image' ? <img src={it.url} alt="" className="size-full object-cover" /> : <div className="grid size-full place-items-center bg-ink p-1 text-center text-[10px] font-bold text-white">{host(it.url)}</div>}<button aria-label="Remove item" onClick={() => del(it)} className="absolute right-1 top-1 grid size-6 place-items-center rounded-full bg-white/90"><X className="size-3" /></button></div>)}</div>
       <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]"><input aria-label="Caption" className={inputCls} maxLength={140} value={cap} onChange={e => setCap(e.target.value)} placeholder="Caption (optional)" /><input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" multiple className="sr-only" onChange={pick} aria-label="Upload portfolio photos" /><Button size="sm" variant="ghost" disabled={busy} onClick={() => fileRef.current?.click()}>{busy ? 'Adding…' : 'Add photos'}</Button></div>
-      <form className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]" onSubmit={async e => { e.preventDefault(); if (await add({ kind: 'link', url: link })) setLink(''); }}><input aria-label="Video link" className={inputCls} inputMode="url" value={link} onChange={e => setLink(e.target.value)} placeholder="YouTube, Vimeo, Instagram or TikTok link" /><Button size="sm" variant="ghost" type="submit" disabled={busy || !link}>Add link</Button></form>
+      <form className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]" onSubmit={async e => { e.preventDefault(); if (await add({ kind: 'link', url: link })) setLink(''); }}><input aria-label="Video link" className={inputCls} inputMode="url" value={link} onChange={e => setLink(e.target.value)} placeholder="YouTube or Vimeo link" /><Button size="sm" variant="ghost" type="submit" disabled={busy || !link}>Add link</Button></form>
     </div>
   );
 }
