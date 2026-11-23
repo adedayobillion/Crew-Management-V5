@@ -146,6 +146,22 @@ test('booking, acceptance, strict cancellation, payment via Bachs webhook, compl
   await pool.query(`UPDATE bookings SET start_date = CURRENT_DATE - 2, end_date = CURRENT_DATE - 2 WHERE id = $1`, [bookingId]);
   assert.equal((await crew.a.post(`/api/bookings/${bookingId}/complete`, {})).status, 403, 'only the client completes');
   assert.equal((await client.a.post(`/api/bookings/${bookingId}/complete`, {})).status, 200);
+  // two-way reviews: crew reviews the booker, and other crew then see it on the client profile
+  assert.equal((await client.a.get(`/api/bookings/${bookingId}/client-profile`)).status, 403, 'clients do not see their own profile view');
+  assert.equal((await crew.a.post('/api/reviews', { booking_id: bookingId, rating: 5, comment: 'Paid on time, clear brief.' })).status, 201);
+  assert.equal((await crew.a.post('/api/reviews', { booking_id: bookingId, rating: 5 })).status, 409, 'one review per side');
+  const cp = (await crew.a.get(`/api/bookings/${bookingId}/client-profile`)).body; assert.equal(cp.review_count, 1); assert.equal(cp.completed_jobs >= 1, true); assert.equal(cp.reviews[0].comment, 'Paid on time, clear brief.');
+  // portfolio
+  const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64, 1)]).toString('base64');
+  const pf = `/api/crew/listings/${listingId}/portfolio`;
+  assert.equal((await client.a.post(pf, { kind: 'link', url: 'https://youtu.be/abc123XYZ_-' })).status, 404, 'only the listing owner can add');
+  assert.equal((await crew.a.post(pf, { kind: 'link', url: 'http://evil.example/x' })).status, 400);
+  assert.equal((await crew.a.post(pf, { kind: 'image', data_base64: Buffer.from('not an image at all').toString('base64') })).status, 400, 'content must be a real image');
+  const img = await crew.a.post(pf, { kind: 'image', data_base64: jpg, caption: 'Set photo' }); assert.equal(img.status, 201);
+  assert.equal((await crew.a.post(pf, { kind: 'link', url: 'https://youtu.be/abc123XYZ_-' })).status, 201);
+  const items = (await agent().get(`/api/professionals/${listingId}/portfolio`)).body; assert.equal(items.length, 2);
+  assert.equal((await agent().get(items.find(i => i.kind === 'image').url)).status, 200, 'public can view portfolio images');
+  assert.equal((await crew.a.del(`${pf}/${img.body.id}`)).status, 200);
 });
 
 test('admin: named account with 2FA, recovery codes, payout rules, audit', async () => {
@@ -262,7 +278,7 @@ test('hourly and flat-fee listings: quantity, delivery date, calendar blocking',
 test('hardening: no-store API responses, small JSON bodies, per-account login throttle', async () => {
   const h = await fetch(BASE + '/api/professionals');
   assert.equal(h.headers.get('cache-control'), 'no-store'); assert.ok(h.headers.get('permissions-policy'));
-  assert.match(h.headers.get('content-security-policy') || '', /img-src 'self' data: blob:;/);
+  assert.match(h.headers.get('content-security-policy') || '', /img-src 'self' data: blob: https:\/\/i\.ytimg\.com;/);
   const big = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'a@b.co', password: 'x'.repeat(200000) }) });
   assert.equal(big.status, 413, 'oversized JSON is refused on normal routes');
   const email = `throttle${Date.now()}@test.dev`; let last;

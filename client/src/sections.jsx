@@ -184,7 +184,7 @@ export function SectionHead({ tag, title, children }) {
     </Reveal>
   );
 }
-function ProCard({ p, i, saved, onSave, onBook, inGroup, onGroup }) {
+function ProCard({ p, i, saved, onSave, onBook, inGroup, onGroup, onView }) {
   return (
     <motion.div layout initial={{ opacity: 0, y: 26, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.18 } }} transition={{ duration: 0.5, delay: Math.min(i, 8) * 0.06, ease: [0.22, 1, 0.36, 1] }} className="flex">
       <SpotlightCard className="flex w-full flex-col rounded-[19px] border border-line bg-white shadow-[0_1px_2px_#1723370a] transition-shadow duration-300 hover:border-[#d3dfb8] hover:shadow-lift">
@@ -198,7 +198,7 @@ function ProCard({ p, i, saved, onSave, onBook, inGroup, onGroup }) {
           </motion.button>
         </div>
         <div className="relative z-[1] flex flex-1 flex-col p-[15px] sm:p-[17px]">
-          <h3 className="font-display text-[17px] font-extrabold tracking-[-.03em]">{p.name}</h3>
+          <button type="button" onClick={() => onView(p)} className="w-fit text-left"><h3 className="font-display text-[17px] font-extrabold tracking-[-.03em] hover:underline">{p.name}</h3></button>
           <div className="my-1.5 mb-3 text-xs text-muted">{p.role} · {p.location}</div>
           <p className="mb-3.5 min-h-[38px] text-[13px] leading-relaxed text-[#566274] sm:text-xs">{p.desc}</p>
           <div className="mb-3 flex flex-wrap gap-1.5">{p.skills.map(s => <span key={s} className="rounded-md bg-[#f0f3f4] px-2 py-1 text-[10px] text-[#566274] transition-colors group-hover/spot:bg-[#edf5da] group-hover/spot:text-[#3e5a14]">{s}</span>)}</div>
@@ -207,6 +207,7 @@ function ProCard({ p, i, saved, onSave, onBook, inGroup, onGroup }) {
             <div><strong className="font-display text-lg tracking-[-.04em] sm:text-[19px]">{naira(p.rate)}</strong><small className="block text-[10px] text-muted">{p.rate_unit === 'hour' ? 'per hour' : p.rate_unit === 'project' ? 'per project' : 'per day'} · {p.credits}{p.reviewCount > 0 && p.rating != null ? ' · ★ ' + p.rating.toFixed(1) + ' (' + p.reviewCount + ')' : ''}</small></div>
             <div className="flex items-center gap-1.5">
               {(!p.rate_unit || p.rate_unit === 'day') && <button type="button" aria-pressed={inGroup} onClick={() => onGroup(p.id)} className={cn('rounded-full border px-3 py-2 text-xs font-extrabold transition-colors', inGroup ? 'border-lime-deep bg-lime-soft text-ink' : 'border-line bg-white text-[#536072] hover:border-ink/30')}>{inGroup ? '✓ In group' : '+ Group'}</button>}
+              <button type="button" onClick={() => onView(p)} className="rounded-full border border-line px-3 py-2 text-xs font-extrabold hover:border-ink/30">View profile</button>
               <Button size="sm" variant="dark" onClick={() => onBook(p)}>Request booking</Button>
             </div>
           </div>
@@ -215,7 +216,7 @@ function ProCard({ p, i, saved, onSave, onBook, inGroup, onGroup }) {
     </motion.div>
   );
 }
-export function Discover({ pros, loading, filters, setFilters, saved, onSave, onBook, group, onGroup, onGroupOpen, onGroupClear }) {
+export function Discover({ pros, loading, filters, setFilters, saved, onSave, onBook, onView, group, onGroup, onGroupOpen, onGroupClear }) {
   const q = filters.q.toLowerCase().trim();
   let list = pros.filter(p => (!q || (p.name + ' ' + p.role + ' ' + p.category + ' ' + p.skills.join(' ')).toLowerCase().includes(q)) && (!filters.category || p.category === filters.category) && (!filters.location || p.location === filters.location));
   if (filters.sort === 'price-low') list = [...list].sort((a, b) => a.rate - b.rate);
@@ -237,7 +238,7 @@ export function Discover({ pros, loading, filters, setFilters, saved, onSave, on
         <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3 lg:gap-[18px]">{Array.from({ length: 6 }, (_, i) => <SkeletonCard key={i} />)}</div>
       ) : (
         <motion.div layout className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3 lg:gap-[18px]">
-          <AnimatePresence mode="popLayout">{list.map((p, i) => <ProCard key={p.id} p={p} i={i} saved={saved.has(p.id)} onSave={onSave} onBook={onBook} inGroup={group.has(p.id)} onGroup={onGroup} />)}</AnimatePresence>
+          <AnimatePresence mode="popLayout">{list.map((p, i) => <ProCard key={p.id} p={p} i={i} saved={saved.has(p.id)} onSave={onSave} onBook={onBook} inGroup={group.has(p.id)} onGroup={onGroup} onView={onView} />)}</AnimatePresence>
         </motion.div>
       )}
       {group.size > 0 && (

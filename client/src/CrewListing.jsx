@@ -1,3 +1,4 @@
+import { PortfolioManager } from './Profile.jsx';
 import { useEffect, useRef, useState } from 'react';
 import { Button, Field, inputCls } from './ui.jsx';
 import { http, postJSON, todayLagos } from './lib.js';
@@ -134,6 +135,7 @@ export default function CrewListing({ toast }) {
               {selected.showreel && <a href={selected.showreel} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs font-bold text-[#5f7f22] underline">Open portfolio <ExternalLink className="size-3" /></a>}
             </div>
             {selected.bio && <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-muted">{selected.bio}</p>}
+            <PortfolioManager listingId={selected.id} toast={toast} />
             {!!selected.skills?.length && <div className="mt-3 flex flex-wrap gap-1.5">{selected.skills.map(x => <span key={x} className="rounded-md bg-[#f0f3f4] px-2 py-1 text-[10px] text-[#566274]">{x}</span>)}</div>}
           </div>
         )}
