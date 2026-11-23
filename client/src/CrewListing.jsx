@@ -113,7 +113,6 @@ export default function CrewListing({ toast }) {
             <Field label="Location" htmlFor="clLocation"><input id="clLocation" className={inputCls} maxLength={120} value={form.location} onChange={set('location')} placeholder="Lagos, Nigeria" /></Field>
             <Field label="How do you charge?" htmlFor="clUnit"><select id="clUnit" className={inputCls} value={form.rateUnit} onChange={set('rateUnit')}><option value="day">Per day (full or half day)</option><option value="hour">Per hour</option><option value="project">Flat project fee</option></select></Field>
             <Field label={form.rateUnit === 'hour' ? 'Hourly rate (₦)' : form.rateUnit === 'project' ? 'Starting project fee (₦)' : 'Daily rate (₦)'} htmlFor="clRate"><input id="clRate" type="number" min="1000" max="10000000" step="500" className={inputCls} required value={form.rate} onChange={set('rate')} /></Field>
-            <Field label="Portfolio / showreel link" htmlFor="clReel" full><input id="clReel" type="url" className={inputCls} maxLength={300} value={form.showreel} onChange={set('showreel')} placeholder="https://vimeo.com/… or your portfolio website" /></Field>
             <Field label="Skills (comma separated)" htmlFor="clSkills" full><input id="clSkills" className={inputCls} value={form.skills} onChange={set('skills')} placeholder="Steadicam, Drone, Anamorphic" /></Field>
             <Field label="About this service" htmlFor="clBio" full><textarea id="clBio" className={inputCls + ' min-h-24'} maxLength={1000} value={form.bio} onChange={set('bio')} placeholder="Describe your experience and the work you offer." /></Field>
             <div className="flex flex-wrap gap-2 sm:col-span-2"><Button type="submit" disabled={saving}>{saving ? 'Saving…' : selectedId ? 'Save listing changes' : 'Publish new listing'}</Button><Button type="button" variant="ghost" onClick={() => { setEditing(false); if (selected) setForm(toForm(selected)); else setForm(emptyForm); }}>Cancel</Button></div>
@@ -132,7 +131,6 @@ export default function CrewListing({ toast }) {
               <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={pickPhoto} aria-label="Upload listing photo" />
               <Button size="sm" variant="ghost" disabled={photoBusy} onClick={() => fileRef.current?.click()}>{photoBusy ? 'Uploading…' : selected.photo ? 'Change photo' : 'Upload photo'}</Button>
               {selected.photo && <Button size="sm" variant="ghost" onClick={removePhoto}>Remove photo</Button>}
-              {selected.showreel && <a href={selected.showreel} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs font-bold text-[#5f7f22] underline">Open portfolio <ExternalLink className="size-3" /></a>}
             </div>
             {selected.bio && <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-muted">{selected.bio}</p>}
             <PortfolioManager listingId={selected.id} toast={toast} />

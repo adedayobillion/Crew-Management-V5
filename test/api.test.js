@@ -156,6 +156,7 @@ test('booking, acceptance, strict cancellation, payment via Bachs webhook, compl
   const pf = `/api/crew/listings/${listingId}/portfolio`;
   assert.equal((await client.a.post(pf, { kind: 'link', url: 'https://youtu.be/abc123XYZ_-' })).status, 404, 'only the listing owner can add');
   assert.equal((await crew.a.post(pf, { kind: 'link', url: 'http://evil.example/x' })).status, 400);
+  assert.equal((await crew.a.post(pf, { kind: 'link', url: 'https://www.instagram.com/someone' })).status, 400, 'only in-app playable video links');
   assert.equal((await crew.a.post(pf, { kind: 'image', data_base64: Buffer.from('not an image at all').toString('base64') })).status, 400, 'content must be a real image');
   const img = await crew.a.post(pf, { kind: 'image', data_base64: jpg, caption: 'Set photo' }); assert.equal(img.status, 201);
   assert.equal((await crew.a.post(pf, { kind: 'link', url: 'https://youtu.be/abc123XYZ_-' })).status, 201);

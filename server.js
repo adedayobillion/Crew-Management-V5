@@ -55,7 +55,7 @@ pool.on('error', err => console.error('Idle database client error:', err.message
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 
-app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], baseUri: ["'self'"], fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'], styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'], scriptSrc: ["'self'"], scriptSrcAttr: ["'none'"], imgSrc: ["'self'", 'data:', 'blob:', 'https://i.ytimg.com'], frameSrc: ['https://www.youtube-nocookie.com'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], formAction: ["'self'"] } } }));
+app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], baseUri: ["'self'"], fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'], styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'], scriptSrc: ["'self'"], scriptSrcAttr: ["'none'"], imgSrc: ["'self'", 'data:', 'blob:', 'https://i.ytimg.com'], frameSrc: ['https://www.youtube-nocookie.com', 'https://player.vimeo.com'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], formAction: ["'self'"] } } }));
 // rawBody is kept so payment-webhook signatures can be verified against the exact bytes received
 // Small bodies everywhere; only the upload routes (base64 photos and ID documents) may be large.
 const jsonVerify = (req, res, buf) => { req.rawBody = buf; };
@@ -1332,7 +1332,7 @@ const shortName = n => { const p = String(n || '').trim().split(/\s+/); return p
 /* ---------------- portfolio: photos and video links shown on a crew profile ---------------- */
 const PORTFOLIO_MAX = 24;
 const imageKind = b => (b.length > 12 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff ? 'image/jpeg' : b.length > 8 && b.subarray(0, 4).toString('hex') === '89504e47' ? 'image/png' : b.length > 12 && b.subarray(0, 4).toString() === 'RIFF' && b.subarray(8, 12).toString() === 'WEBP' ? 'image/webp' : null);
-const VIDEO_HOSTS = /^(www\.|m\.)?(youtube\.com|youtu\.be|vimeo\.com|instagram\.com|tiktok\.com)$/i;
+const VIDEO_HOSTS = /^(www\.|m\.)?(youtube\.com|youtu\.be|vimeo\.com)$/i;
 async function ownListing(req) {
   const id = toInt(req.params.id) || 0;
   if (!(await crewProfessionalIds(pool, req.user)).includes(id)) fail(404, 'Listing not found.');
@@ -1356,7 +1356,7 @@ app.post('/api/crew/listings/:id/portfolio', requireUser, wrap(async (req, res) 
   let row;
   if (b.kind === 'link') {
     let u; try { u = new URL(str(b.url, 500)); } catch (e) { fail(400, 'Enter a valid link starting with https://'); }
-    if (u.protocol !== 'https:' || !VIDEO_HOSTS.test(u.hostname)) fail(400, 'Add a YouTube, Vimeo, Instagram or TikTok link.');
+    if (u.protocol !== 'https:' || !VIDEO_HOSTS.test(u.hostname)) fail(400, 'Add a YouTube or Vimeo video link.');
     row = (await pool.query(`INSERT INTO portfolio_items (professional_id, kind, url, caption) VALUES ($1,'link',$2,$3) RETURNING id`, [proId, u.toString(), caption])).rows[0];
   } else {
     const base64 = String(b.data_base64 || '');
