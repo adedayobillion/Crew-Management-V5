@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Button, Field, Tagline, inputCls } from './ui.jsx';
 import { http, naira, postJSON, proposalBody } from './lib.js';
 import { ProposalFields } from './modals.jsx';
+import { ClientProfileModal } from './Profile.jsx';
 import { ArrowLeft, CalendarClock, Check, CreditCard, FileText, Star, X } from 'lucide-react';
 
 const documentLabels = {
@@ -273,6 +274,7 @@ function ContactCard({ thread }) {
 }
 
 function ActionBar({ thread, busy, panel, setPanel, onComplete, onInvoice, onPay, groupDue, onPayGroup }) {
+  const [showClient, setShowClient] = useState(false);
   const role = thread.my_role, st = thread.status, paid = thread.payment_status === 'paid';
   const started = day(thread.start_date) <= new Date(Date.now() + 3600000).toISOString().slice(0, 10);
   const items = [];
@@ -282,11 +284,13 @@ function ActionBar({ thread, busy, panel, setPanel, onComplete, onInvoice, onPay
   if (groupDue && groupDue.count > 1 && role === 'client' && !paid && ['confirmed', 'in_progress'].includes(st)) items.push(['Pay whole group ' + naira(groupDue.total) + ' (' + groupDue.count + ')', onPayGroup, 'pay', true]);
   if (role === 'client' && paid && ['confirmed', 'in_progress', 'completion_review'].includes(st) && started) items.push(['Job is done', onComplete, null, true]);
   if (['confirmed', 'in_progress', 'completed'].includes(st)) items.push(['Report a problem', () => setPanel('dispute'), 'dispute']);
-  if (role === 'client' && st === 'completed' && paid && !Number(thread.review_count)) items.push(['Leave a review', () => setPanel('review'), 'review', true]);
+  if (role === 'crew') items.push(['Client profile', () => setShowClient(true), 'clientprofile']);
+  if (st === 'completed' && paid && !Number(thread.review_count)) items.push(['Leave a review', () => setPanel('review'), 'review', true]);
   if (paid && role === 'client') items.push(['Invoice', onInvoice, 'invoice']);
   if (!items.length) return null;
   return (
     <div className="flex flex-wrap gap-2 border-t border-line bg-[#fafbfa] px-4 py-2">
+      {showClient && <ClientProfileModal bookingId={thread.id} onClose={() => setShowClient(false)} />}
       {items.map(([label, fn, key, primary]) => <Button key={label} size="sm" variant={primary ? 'primary' : 'ghost'} disabled={busy} aria-pressed={key ? panel === key : undefined} onClick={fn}>{key === 'invoice' && <FileText className="size-4" aria-hidden="true" />}{key === 'pay' && <CreditCard className="size-4" aria-hidden="true" />}{label}</Button>)}
     </div>
   );

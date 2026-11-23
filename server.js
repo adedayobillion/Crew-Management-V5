@@ -55,13 +55,13 @@ pool.on('error', err => console.error('Idle database client error:', err.message
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 
-app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], baseUri: ["'self'"], fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'], styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'], scriptSrc: ["'self'"], scriptSrcAttr: ["'none'"], imgSrc: ["'self'", 'data:', 'blob:'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], formAction: ["'self'"] } } }));
+app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], baseUri: ["'self'"], fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'], styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'], scriptSrc: ["'self'"], scriptSrcAttr: ["'none'"], imgSrc: ["'self'", 'data:', 'blob:', 'https://i.ytimg.com'], frameSrc: ['https://www.youtube-nocookie.com'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], formAction: ["'self'"] } } }));
 // rawBody is kept so payment-webhook signatures can be verified against the exact bytes received
 // Small bodies everywhere; only the upload routes (base64 photos and ID documents) may be large.
 const jsonVerify = (req, res, buf) => { req.rawBody = buf; };
 const jsonSmall = express.json({ limit: '128kb', type: 'application/json', verify: jsonVerify });
 const jsonLarge = express.json({ limit: '8mb', type: 'application/json', verify: jsonVerify });
-app.use((req, res, next) => (/^\/api\/(profile\/ids|crew\/photo|crew\/listings\/\d+\/photo|professionals\/\d+\/photo)$/.test(req.path) ? jsonLarge : jsonSmall)(req, res, next));
+app.use((req, res, next) => (/^\/api\/(profile\/ids|crew\/photo|crew\/listings\/\d+\/photo|crew\/listings\/\d+\/portfolio|professionals\/\d+\/photo)$/.test(req.path) ? jsonLarge : jsonSmall)(req, res, next));
 app.use((req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS' && req.get('origin')) {
     const origin = req.get('origin'); const host = req.get('host');
@@ -409,7 +409,7 @@ async function initDb() {
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS overtime_agreed BOOLEAN NOT NULL DEFAULT FALSE;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_reference ON bookings(reference);
       CREATE INDEX IF NOT EXISTS idx_bookings_user ON bookings(user_id);
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_one_per_booking ON reviews(booking_id);
+      DROP INDEX IF EXISTS idx_reviews_one_per_booking;
     `;
     // Repair databases created by older versions: CREATE TABLE IF NOT EXISTS never adds missing columns.
     const repairs = `
@@ -507,6 +507,13 @@ async function initDb() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
       CREATE INDEX IF NOT EXISTS call_sheets_owner_idx ON call_sheets (owner_id);
+      ALTER TABLE reviews ADD COLUMN IF NOT EXISTS subject_user_id INT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_booking_reviewer ON reviews (booking_id, reviewer_type);
+      CREATE TABLE IF NOT EXISTS portfolio_items (
+        id SERIAL PRIMARY KEY, professional_id INT NOT NULL, kind VARCHAR(10) NOT NULL, url TEXT, mime VARCHAR(40), data BYTEA,
+        caption VARCHAR(140), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS portfolio_items_pro_idx ON portfolio_items (professional_id);
       CREATE TABLE IF NOT EXISTS job_posts (
         id SERIAL PRIMARY KEY, owner_id INT NOT NULL, title VARCHAR(140) NOT NULL, category VARCHAR(40) NOT NULL, role VARCHAR(80),
         description TEXT NOT NULL, location VARCHAR(120) NOT NULL, budget INT, start_date DATE NOT NULL, end_date DATE NOT NULL,
@@ -1320,10 +1327,68 @@ app.get('/api/professionals', wrap(async (req, res) => {
   res.json({ professionals: rows }); // the frontend reads data.professionals
 }));
 
+
+const shortName = n => { const p = String(n || '').trim().split(/\s+/); return p.length > 1 ? p[0] + ' ' + p[p.length - 1][0] + '.' : (p[0] || 'Client'); };
+/* ---------------- portfolio: photos and video links shown on a crew profile ---------------- */
+const PORTFOLIO_MAX = 24;
+const imageKind = b => (b.length > 12 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff ? 'image/jpeg' : b.length > 8 && b.subarray(0, 4).toString('hex') === '89504e47' ? 'image/png' : b.length > 12 && b.subarray(0, 4).toString() === 'RIFF' && b.subarray(8, 12).toString() === 'WEBP' ? 'image/webp' : null);
+const VIDEO_HOSTS = /^(www\.|m\.)?(youtube\.com|youtu\.be|vimeo\.com|instagram\.com|tiktok\.com)$/i;
+async function ownListing(req) {
+  const id = toInt(req.params.id) || 0;
+  if (!(await crewProfessionalIds(pool, req.user)).includes(id)) fail(404, 'Listing not found.');
+  return id;
+}
+app.get('/api/professionals/:id/portfolio', wrap(async (req, res) => {
+  const id = toInt(req.params.id); if (!id) fail(400, 'Invalid id.');
+  const { rows } = await pool.query(`SELECT i.id, i.kind, i.url, i.caption, i.created_at FROM portfolio_items i JOIN professionals p ON p.id = i.professional_id WHERE i.professional_id = $1 AND p.status = 'approved' ORDER BY i.created_at DESC`, [id]);
+  res.json(rows.map(r => ({ id: r.id, kind: r.kind, caption: r.caption || '', url: r.kind === 'link' ? r.url : '/api/portfolio/' + r.id + '/image' })));
+}));
+app.get('/api/portfolio/:id/image', wrap(async (req, res) => {
+  const r = (await pool.query(`SELECT i.mime, i.data FROM portfolio_items i JOIN professionals p ON p.id = i.professional_id WHERE i.id = $1 AND i.kind = 'image' AND p.status = 'approved'`, [toInt(req.params.id) || 0])).rows[0];
+  if (!r) fail(404, 'Not found.');
+  res.set({ 'Content-Type': r.mime, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'public, max-age=86400', 'Content-Security-Policy': "default-src 'none'" }).send(r.data);
+}));
+app.post('/api/crew/listings/:id/portfolio', requireUser, wrap(async (req, res) => {
+  const proId = await ownListing(req); const b = req.body || {};
+  const caption = str(b.caption, 140);
+  const n = (await pool.query('SELECT COUNT(*)::int AS n FROM portfolio_items WHERE professional_id = $1', [proId])).rows[0].n;
+  if (n >= PORTFOLIO_MAX) fail(400, 'You can add up to ' + PORTFOLIO_MAX + ' items. Remove one first.');
+  let row;
+  if (b.kind === 'link') {
+    let u; try { u = new URL(str(b.url, 500)); } catch (e) { fail(400, 'Enter a valid link starting with https://'); }
+    if (u.protocol !== 'https:' || !VIDEO_HOSTS.test(u.hostname)) fail(400, 'Add a YouTube, Vimeo, Instagram or TikTok link.');
+    row = (await pool.query(`INSERT INTO portfolio_items (professional_id, kind, url, caption) VALUES ($1,'link',$2,$3) RETURNING id`, [proId, u.toString(), caption])).rows[0];
+  } else {
+    const base64 = String(b.data_base64 || '');
+    if (!base64 || base64.length > 3 * 1024 * 1024 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) fail(400, 'Choose a valid photo under 2 MB.');
+    const bytes = Buffer.from(base64, 'base64'); const mime = imageKind(bytes);
+    if (!mime || bytes.length > 2 * 1024 * 1024) fail(400, 'Upload a JPG, PNG or WebP photo under 2 MB.');
+    row = (await pool.query(`INSERT INTO portfolio_items (professional_id, kind, mime, data, caption) VALUES ($1,'image',$2,$3,$4) RETURNING id`, [proId, mime, bytes, caption])).rows[0];
+  }
+  res.status(201).json({ id: row.id });
+}));
+app.delete('/api/crew/listings/:id/portfolio/:itemId', requireUser, wrap(async (req, res) => {
+  const proId = await ownListing(req);
+  const r = await pool.query('DELETE FROM portfolio_items WHERE id = $1 AND professional_id = $2', [toInt(req.params.itemId) || 0, proId]);
+  if (!r.rowCount) fail(404, 'Item not found.');
+  res.json({ success: true });
+}));
+// What a crew member sees about the client they are working with: history and reviews written by other crew.
+app.get('/api/bookings/:id/client-profile', requireUser, wrap(async (req, res) => {
+  const b = await getAccessibleBooking(pool, req, req.params.id);
+  if (!b.user_id) fail(404, 'No client profile.');
+  if (ownsBooking(req.user, b)) fail(403, 'This is your own profile.');
+  const u = (await pool.query('SELECT name, created_at FROM users WHERE id = $1', [b.user_id])).rows[0];
+  const done = (await pool.query(`SELECT COUNT(*)::int AS n FROM bookings WHERE user_id = $1 AND status = 'completed' AND payment_status = 'paid'`, [b.user_id])).rows[0].n;
+  const reviews = (await pool.query(`SELECT id, rating, comment, reviewer_name, created_at FROM reviews WHERE subject_user_id = $1 AND reviewer_type = 'crew' ORDER BY created_at DESC LIMIT 50`, [b.user_id])).rows.map(r => ({ ...r, reviewer_name: shortName(r.reviewer_name) }));
+  const avg = reviews.length ? Math.round(reviews.reduce((a, r) => a + r.rating, 0) / reviews.length * 10) / 10 : null;
+  res.json({ name: shortName(u?.name), member_since: u?.created_at, completed_jobs: done, rating: avg, review_count: reviews.length, reviews });
+}));
+
 app.get('/api/professionals/:id/reviews', wrap(async (req, res) => {
   const id = toInt(req.params.id); if (!id) fail(400, 'Invalid id.');
   const { rows } = await pool.query('SELECT id, rating, comment, reviewer_name, reviewer_type, created_at FROM reviews WHERE professional_id = $1 ORDER BY created_at DESC', [id]);
-  res.json(rows);
+  res.json(rows.map(r => ({ ...r, reviewer_name: shortName(r.reviewer_name) })));
 }));
 
 /* ---------------- bookings (client) ---------------- */
@@ -1775,17 +1840,20 @@ app.post('/api/disputes', requireUser, wrap(async (req, res) => {
 
 app.post('/api/reviews', requireUser, wrap(async (req, res) => {
   const b = await getAccessibleBooking(pool, req, req.body.booking_id);
-  if (!ownsBooking(req.user, b)) fail(403, 'You can only review your own bookings.');
-  if (b.payment_status !== 'paid' || b.status !== 'completed') fail(400, 'You can review a booking once it is paid and you have confirmed the job is complete.');
+  const crewIds = await crewUserIdsFor(pool, b.professional_id);
+  const side = ownsBooking(req.user, b) ? 'client' : crewIds.includes(Number(req.user.id)) ? 'crew' : null;
+  if (!side) fail(403, 'You can only review your own bookings.');
+  if (b.payment_status !== 'paid' || b.status !== 'completed') fail(400, 'You can review a booking once it is paid and the job is marked complete.');
   const rating = Number(req.body.rating);
   if (!Number.isInteger(rating) || rating < 1 || rating > 5) fail(400, 'Rating must be a whole number from 1 to 5.');
   const row = await withTx(async db => {
-    const dup = await db.query('SELECT 1 FROM reviews WHERE booking_id = $1', [b.id]);
+    const dup = await db.query('SELECT 1 FROM reviews WHERE booking_id = $1 AND reviewer_type = $2', [b.id, side]);
     if (dup.rows.length) fail(409, 'You have already reviewed this booking.');
+    // Crew reviews of a booker are stored against the booker (professional_id stays empty so listing ratings are unaffected).
     const ins = await db.query(
-      `INSERT INTO reviews (booking_id, professional_id, reviewer_type, reviewer_name, rating, comment) VALUES ($1,$2,'client',$3,$4,$5) RETURNING *`,
-      [b.id, b.professional_id, req.user.name, rating, str(req.body.comment, 1000)]);
-    await db.query(`UPDATE professionals SET rating = (SELECT ROUND(AVG(rating)::numeric, 1) FROM reviews WHERE professional_id = $1) WHERE id = $1`, [b.professional_id]);
+      `INSERT INTO reviews (booking_id, professional_id, subject_user_id, reviewer_type, reviewer_name, rating, comment) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [b.id, side === 'client' ? b.professional_id : null, side === 'crew' ? b.user_id : null, side, req.user.name, rating, str(req.body.comment, 1000)]);
+    if (side === 'client') await db.query(`UPDATE professionals SET rating = (SELECT ROUND(AVG(rating)::numeric, 1) FROM reviews WHERE professional_id = $1) WHERE id = $1`, [b.professional_id]);
     return ins.rows[0];
   });
   res.status(201).json(row);
@@ -1849,7 +1917,7 @@ app.get('/api/inbox',requireUser,wrap(async(req,res)=>{
   const crew="EXISTS (SELECT 1 FROM professionals px JOIN crew_applications ca ON (ca.professional_id=px.id OR px.application_id='app-' || ca.id::text) WHERE px.id=b.professional_id AND ca.user_id=$1)";
   const role="CASE WHEN "+client+" THEN 'client' ELSE 'crew' END";
   const {rows}=await pool.query(
-    "SELECT b.id,COALESCE(b.reference,'') AS reference,b.client_name,b.project_type,b.status,b.created_at,b.payment_status,b.start_date,b.end_date,b.booking_unit,b.daily_rate,b.client_total,b.crew_net,b.cancel_reason,b.cancelled_by,b.group_title,b.group_ref,b.quantity,b.schedule_kind,(SELECT rate_unit FROM professionals WHERE id=b.professional_id) AS rate_unit,(SELECT COUNT(*)::int FROM reviews rv WHERE rv.booking_id=b.id) AS review_count,p.name AS professional_name,"+role+" AS my_role,"+
+    "SELECT b.id,COALESCE(b.reference,'') AS reference,b.client_name,b.project_type,b.status,b.created_at,b.payment_status,b.start_date,b.end_date,b.booking_unit,b.daily_rate,b.client_total,b.crew_net,b.cancel_reason,b.cancelled_by,b.group_title,b.group_ref,b.quantity,b.schedule_kind,(SELECT rate_unit FROM professionals WHERE id=b.professional_id) AS rate_unit,(SELECT COUNT(*)::int FROM reviews rv WHERE rv.booking_id=b.id AND rv.reviewer_type="+role+") AS review_count,p.name AS professional_name,"+role+" AS my_role,"+
     "(SELECT m.masked_content FROM messages m WHERE m.booking_id=b.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) AS last_message,"+
     "(SELECT MAX(m.created_at) FROM messages m WHERE m.booking_id=b.id) AS last_message_at,"+
     "(SELECT COUNT(*)::int FROM messages m WHERE m.booking_id=b.id AND ((m.sender_user_id IS NOT NULL AND m.sender_user_id<>$1) OR (m.sender_user_id IS NULL AND m.sender_type<>CASE WHEN "+client+" THEN 'client' ELSE 'crew' END)) "+

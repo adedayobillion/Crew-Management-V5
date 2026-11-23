@@ -7,6 +7,7 @@ import { ScrollProgress, ToastProvider, useToast } from './ui.jsx';
 import { http, postJSON } from './lib.js';
 import { CallSheetTool, CallSheetView } from './CallSheet.jsx';
 import { JobBoard } from './JobBoard.jsx';
+import { ProfileDrawer } from './Profile.jsx';
 import { Mail } from 'lucide-react';
 
 function Shell() {
@@ -16,6 +17,7 @@ function Shell() {
   const [page, setPage] = useState('marketplace');
   const [filters, setFilters] = useState({ q: '', category: '', location: '', sort: 'recommended' });
   const [saved, setSaved] = useState(new Set());
+  const [viewing, setViewing] = useState(null);
   const [group, setGroup] = useState(new Set()); const [groupOpen, setGroupOpen] = useState(false);
   const toggleGroup = id => setGroup(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else if (n.size >= 12) toast('A group can have up to 12 people.'); else n.add(id); return n; });
   const [auth, setAuth] = useState({ open: false, mode: 'login', role: null, next: null });
@@ -184,7 +186,7 @@ function Shell() {
           {page === 'marketplace' ? (
             <div key="m">
               <Hero filters={filters} setFilters={setFilters} onJoin={openJoin} />
-              <Discover pros={pros} loading={loading} filters={filters} setFilters={setFilters} saved={saved} onSave={toggleSave} onBook={openBooking} group={group} onGroup={toggleGroup} onGroupClear={() => setGroup(new Set())}
+              <Discover onView={setViewing} pros={pros} loading={loading} filters={filters} setFilters={setFilters} saved={saved} onSave={toggleSave} onBook={openBooking} group={group} onGroup={toggleGroup} onGroupClear={() => setGroup(new Set())}
                 onGroupOpen={async () => { if (!user) { openAuth('login', () => setGroupOpen(true)); toast('Log in to request a group booking.'); return; } if (await ensureMode('client')) setGroupOpen(true); }} />
               <How /><Trust /><Banner onJoin={openJoin} />
             </div>
@@ -200,6 +202,7 @@ function Shell() {
       <AuthModal open={auth.open} mode={auth.mode} setMode={m => setAuth(a => ({ ...a, mode: m }))} defaultRole={auth.role} onClose={closeAuth} onSuccess={onAuthed} openLegal={setLegal} />
       <GroupModal pros={groupOpen ? pros.filter(p => group.has(p.id)) : []} user={user} onClose={() => setGroupOpen(false)} onNeedAuth={() => { setGroupOpen(false); openAuth('login', () => setGroupOpen(true)); }}
         onSent={d => { setGroupOpen(false); setGroup(new Set()); toast(d.bookings.length + ' requests sent. Each person replies in their own chat. Nothing is charged until they accept.'); openInbox(d.bookings[0].id); }} />
+      <AnimatePresence>{viewing && <ProfileDrawer key="pd" pro={viewing} onClose={() => setViewing(null)} onBook={p => { setViewing(null); openBooking(p); }} />}</AnimatePresence>
       <BookingModal pro={bookingPro} user={user} onClose={() => setBookingPro(null)} onNeedAuth={pro => { setBookingPro(null); openAuth('login', () => setBookingPro(pro)); }}
         onSent={b => { setBookingPro(null); toast('Request sent. Agree the details in the chat. Nothing is charged until it is accepted.'); openInbox(b.id); }} />
       <JoinModal open={joinOpen} user={user} onClose={() => setJoinOpen(false)} onNeedAuth={() => { setJoinOpen(false); openAuth('login', () => setJoinOpen(true), 'crew'); }}
