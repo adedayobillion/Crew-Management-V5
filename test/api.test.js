@@ -35,7 +35,7 @@ function totp(secret) {
   return String((((h[o] & 0x7f) << 24) | (h[o + 1] << 16) | (h[o + 2] << 8) | h[o + 3]) % 1e6).padStart(6, '0');
 }
 const signed = body => { const raw = JSON.stringify(body), t = Math.floor(Date.now() / 1000); return { raw, sig: 't=' + t + ',v1=' + crypto.createHmac('sha256', WH).update(t + '.' + raw).digest('hex') }; };
-const register = async (name, type) => { const a = agent(); const r = await a.post('/api/auth/register', { name, email: name.toLowerCase().replace(/\W/g, '') + '@test.dev', password: 'password123456', termsAccepted: true, accountType: type }); assert.equal(r.status, 201, JSON.stringify(r.body)); await pool.query('UPDATE users SET email_verified = TRUE WHERE id = $1', [r.body.user.id]); return { a, id: r.body.user.id, email: r.body.user.email }; };
+const register = async (name, type) => { const a = agent(); const r = await a.post('/api/auth/register', { name: /\s/.test(name) ? name : name + ' Tester', phone: '+234 801 234 5678', location: 'Lagos', email: name.toLowerCase().replace(/\W/g, '') + '@test.dev', password: 'password123456', termsAccepted: true, accountType: type }); assert.equal(r.status, 201, JSON.stringify(r.body)); await pool.query('UPDATE users SET email_verified = TRUE WHERE id = $1', [r.body.user.id]); return { a, id: r.body.user.id, email: r.body.user.email }; };
 const tomorrow = n => new Date(Date.now() + (n + 20) * 86400000).toISOString().slice(0, 10);
 
 test.before(async () => {
@@ -62,7 +62,9 @@ test('health, share tags and static assets', async () => {
 
 test('accounts: password rules, login, wrong password, reset flow, change password, delete', async () => {
   const a = agent();
-  assert.equal((await a.post('/api/auth/register', { name: 'Weak', email: 'weak@test.dev', password: 'short', termsAccepted: true, accountType: 'client' })).status, 400);
+  const base = { name: 'Ada Obi', phone: '+234 801 234 5678', location: 'Lagos', email: 'req@test.dev', password: 'password123456', termsAccepted: true, accountType: 'client' };
+  for (const bad of [{ name: 'Ada' }, { phone: '' }, { phone: 'abc' }, { location: '' }, { email: 'nope' }]) assert.equal((await a.post('/api/auth/register', { ...base, ...bad })).status, 400, JSON.stringify(bad));
+  assert.equal((await a.post('/api/auth/register', { name: 'Weak Tester', phone: '+234 801 234 5678', location: 'Lagos', email: 'weak@test.dev', password: 'short', termsAccepted: true, accountType: 'client' })).status, 400);
   const u = await register('Reset Me', 'client');
   assert.equal((await agent().post('/api/auth/login', { email: u.email, password: 'wrongpassword1' })).status, 401);
   assert.equal((await agent().post('/api/auth/forgot', { email: 'nobody@test.dev' })).status, 200);
@@ -82,7 +84,7 @@ test('accounts: password rules, login, wrong password, reset flow, change passwo
 });
 
 test('email verification gates bookings', async () => {
-  const a = agent(); const r = await a.post('/api/auth/register', { name: 'Unverified', email: 'unv@test.dev', password: 'password123456', termsAccepted: true, accountType: 'client' });
+  const a = agent(); const r = await a.post('/api/auth/register', { name: 'Unverified Tester', phone: '+234 801 234 5678', location: 'Lagos', email: 'unv@test.dev', password: 'password123456', termsAccepted: true, accountType: 'client' });
   const res = await a.post('/api/bookings', { professionalId: 1, startDate: tomorrow(1), endDate: tomorrow(1), message: 'x' });
   assert.equal(res.status, 403); assert.equal(res.body.code, 'email_unverified');
   await new Promise(r2 => setTimeout(r2, 300));

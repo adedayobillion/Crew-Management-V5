@@ -918,7 +918,10 @@ app.post('/api/auth/register', authLimiter, wrap(async (req, res) => {
   const email = str(req.body.email, 254).toLowerCase();
   const password = String(req.body.password || '');
   const accountType = req.body.accountType === 'crew' ? 'crew' : 'client';
-  if (name.length < 2) fail(400, 'Please enter your full name.');
+  const phone = str(req.body.phone, 30), location = str(req.body.location, 120);
+  if (name.length < 3 || name.split(/\s+/).filter(Boolean).length < 2) fail(400, 'Please enter your full name as it appears on your government ID (first and last name).');
+  if (!/^\+?[0-9][0-9\s\-().]{6,22}[0-9]$/.test(phone)) fail(400, 'Please enter a valid phone number, for example +234 801 234 5678.');
+  if (location.length < 2) fail(400, 'Please enter your location, for example Lagos.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail(400, 'Please enter a valid email address.');
   checkPassword(password);
   if (!req.body.termsAccepted) fail(400, 'You must accept the terms to create an account.');
@@ -926,8 +929,8 @@ app.post('/api/auth/register', authLimiter, wrap(async (req, res) => {
   let user;
   try {
     const r = await pool.query(
-      `INSERT INTO users (name, email, password_hash, account_type, account_status, terms_accepted_at, terms_version) VALUES ($1,$2,$3,$4,$5,NOW(),'v1') RETURNING *`,
-      [name, email, hash, accountType, REQUIRE_APPROVAL ? 'pending_review' : 'approved']);
+      `INSERT INTO users (name, email, password_hash, account_type, account_status, terms_accepted_at, terms_version, phone, location) VALUES ($1,$2,$3,$4,$5,NOW(),'v1',$6,$7) RETURNING *`,
+      [name, email, hash, accountType, REQUIRE_APPROVAL ? 'pending_review' : 'approved', phone, location]);
     user = r.rows[0];
   } catch (e) {
     if (e.code === '23505') fail(409, 'An account with this email already exists. Try logging in.');

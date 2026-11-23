@@ -9,7 +9,7 @@ import { ArrowUpRight } from 'lucide-react';
 export function AuthModal({ open, mode, setMode, defaultRole, onClose, onSuccess, openLegal }) {
   const reg = mode === 'register', forgot = mode === 'forgot';
   const [sent, setSent] = useState('');
-  const [f, setF] = useState({ name: '', email: '', password: '', role: 'client', terms: false });
+  const [f, setF] = useState({ name: '', email: '', phone: '', location: '', password: '', role: 'client', terms: false });
   const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
   const first = useRef(null);
   useEffect(() => { if (open) { setErr(''); setSent(''); setF(s => ({ ...s, role: defaultRole || 'client' })); setTimeout(() => first.current?.focus(), 120); } }, [open, mode]);
@@ -24,11 +24,11 @@ export function AuthModal({ open, mode, setMode, defaultRole, onClose, onSuccess
       } catch (e2) { setErr(e2.message); } finally { setBusy(false); }
       return;
     }
-    const payload = reg ? { name: f.name, email: f.email, password: f.password, accountType: f.role, termsAccepted: f.terms } : { email: f.email, password: f.password };
+    const payload = reg ? { name: f.name, email: f.email, phone: f.phone, location: f.location, password: f.password, accountType: f.role, termsAccepted: f.terms } : { email: f.email, password: f.password };
     try {
       const { ok, data } = await postJSON('/api/auth/' + mode, payload);
       if (!ok) throw new Error(data.error || 'Could not authenticate.');
-      setF({ name: '', email: '', password: '', role: 'client', terms: false });
+      setF({ name: '', email: '', phone: '', location: '', password: '', role: 'client', terms: false });
       onSuccess(data.user, mode);
     } catch (e2) { setErr(e2.message); } finally { setBusy(false); }
   }
@@ -43,11 +43,19 @@ export function AuthModal({ open, mode, setMode, defaultRole, onClose, onSuccess
         <AnimatePresence initial={false}>
           {reg && (
             <motion.div key="n" initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
-              <Field label="Full name" htmlFor="authName"><input ref={first} id="authName" className={inputCls} required value={f.name} onChange={set('name')} autoComplete="name" maxLength={120} placeholder="Your full name" /></Field>
+              <Field label="Full name (as on your government ID)" htmlFor="authName"><input ref={first} id="authName" className={inputCls} required value={f.name} onChange={set('name')} autoComplete="name" maxLength={120} placeholder="First and last name" /></Field>
             </motion.div>
           )}
         </AnimatePresence>
         <Field label="Email address" htmlFor="authEmail"><input ref={reg ? null : first} id="authEmail" type="email" className={inputCls} required value={f.email} onChange={set('email')} autoComplete="email" maxLength={254} placeholder="you@example.com" /></Field>
+        <AnimatePresence initial={false}>
+          {reg && (
+            <motion.div key="pl" initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="grid gap-3.5 overflow-hidden">
+              <Field label="Phone number" htmlFor="authPhone"><input id="authPhone" type="tel" className={inputCls} required value={f.phone} onChange={set('phone')} autoComplete="tel" maxLength={30} placeholder="+234 801 234 5678" /></Field>
+              <Field label="Location" htmlFor="authLoc"><input id="authLoc" className={inputCls} required value={f.location} onChange={set('location')} autoComplete="address-level2" maxLength={120} placeholder="City, e.g. Lagos" /></Field>
+            </motion.div>
+          )}
+        </AnimatePresence>
         {!forgot && <Field label="Password" htmlFor="authPassword"><input id="authPassword" type="password" className={inputCls} required minLength={10} maxLength={200} value={f.password} onChange={set('password')} autoComplete={reg ? 'new-password' : 'current-password'} placeholder={reg ? 'At least 10 characters, with a letter and number' : 'Your password'} /></Field>}
         {!reg && !forgot && <button type="button" onClick={() => setMode('forgot')} className="-mt-1.5 justify-self-start text-xs font-bold text-[#526f1f] underline">Forgot your password?</button>}
         <AnimatePresence initial={false}>
