@@ -62,6 +62,13 @@ export default function CrewListing({ toast }) {
     toast(r.ok ? (selected.is_active ? 'Listing paused and hidden from clients.' : 'Listing is live again.') : (r.data.error || 'Could not update listing.'));
     if (r.ok) load(selected.id);
   }
+  async function deleteListing() {
+    if (!selected) return;
+    if (!confirm('Delete this listing permanently? It disappears from the marketplace and its portfolio is removed. Past bookings and reviews are kept.')) return;
+    const r = await http('/api/crew/listings/' + selected.id, { method: 'DELETE' }).catch(() => ({ ok: false, data: {} }));
+    toast(r.ok ? 'Listing deleted.' : (r.data.error || 'Could not delete the listing.'));
+    if (r.ok) load();
+  }
   async function pickPhoto(e) {
     const file = e.target.files?.[0]; e.target.value = '';
     if (!file || !selected) return;
@@ -125,7 +132,7 @@ export default function CrewListing({ toast }) {
                 {selected.photo ? <img src={selected.photo} alt="" className="size-14 rounded-xl object-cover" /> : <div className="grid size-14 place-items-center rounded-xl bg-[#eef2ea] text-xs text-muted">No photo</div>}
                 <div><strong className="block">{selected.role}</strong><span className="text-xs text-muted">{selected.category} · {selected.location} · ₦{Number(selected.rate).toLocaleString('en-NG')}{selected.rate_unit === 'hour' ? '/hour' : selected.rate_unit === 'project' ? ' per project' : '/day'}</span><span className="mt-1 block text-[11px] text-muted">{selected.is_active ? 'Live on marketplace' : 'Paused'}</span></div>
               </div>
-              <div className="flex flex-wrap gap-2"><Button size="sm" onClick={() => { setForm(toForm(selected)); setEditing(true); }}><Pencil className="size-3.5" />Edit listing</Button><Button size="sm" variant="ghost" onClick={togglePaused}>{selected.is_active ? 'Pause listing' : 'Publish listing'}</Button></div>
+              <div className="flex flex-wrap gap-2"><Button size="sm" onClick={() => { setForm(toForm(selected)); setEditing(true); }}><Pencil className="size-3.5" />Edit listing</Button><Button size="sm" variant="ghost" onClick={togglePaused}>{selected.is_active ? 'Pause listing' : 'Publish listing'}</Button><Button size="sm" variant="ghost" onClick={deleteListing}>Delete listing</Button></div>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-3">
               <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={pickPhoto} aria-label="Upload listing photo" />
