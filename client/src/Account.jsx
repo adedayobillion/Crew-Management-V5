@@ -152,8 +152,8 @@ export function ProfilePage({ user, onBack, onUserUpdated, onSettingsUpdated, on
               <form onSubmit={saveProfile} className="mt-4 grid gap-3 sm:grid-cols-2">
                 <Field label="Full name" htmlFor="profileName"><input id="profileName" className={inputCls} required minLength={2} maxLength={120} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></Field>
                 <Field label="Email address" htmlFor="profileEmail"><input id="profileEmail" className={inputCls} readOnly value={profile?.email || user?.email || ''} /></Field>
-                <Field label="Phone number" htmlFor="profilePhone"><input id="profilePhone" className={inputCls} maxLength={40} value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+234…" /></Field>
-                <Field label="Location" htmlFor="profileLocation"><input id="profileLocation" className={inputCls} maxLength={120} value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} placeholder="City, country" /></Field>
+                <Field label="Phone number" htmlFor="profilePhone"><input id="profilePhone" type="tel" required className={inputCls} maxLength={40} value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+234…" /></Field>
+                <Field label="Location" htmlFor="profileLocation"><input id="profileLocation" required className={inputCls} maxLength={120} value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} placeholder="City, country" /></Field>
                 <Field label="About you" htmlFor="profileBio" full><textarea id="profileBio" className={inputCls + ' min-h-24'} maxLength={1000} value={form.bio} onChange={e => setForm(f => ({ ...f, bio: e.target.value }))} placeholder="A short introduction." /></Field>
                 <div className="sm:col-span-2"><Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save profile'}</Button></div>
               </form>

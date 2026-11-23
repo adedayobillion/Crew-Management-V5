@@ -172,6 +172,12 @@ function Shell() {
           <button type="button" className="underline" onClick={async () => { const r = await postJSON('/api/auth/resend-verification', {}).catch(() => ({ ok: false, data: {} })); toast(r.ok ? 'Confirmation email sent. Check your inbox.' : (r.data.error || 'Could not send the email.')); }}>Resend the email</button>
         </div>
       )}
+      {user && user.profileComplete === false && page !== 'profile' && (
+        <div role="status" className="border-b border-[#cfe6b0] bg-lime-soft px-4 py-2 text-center text-xs font-semibold text-[#3f6b12]">
+          Complete your profile with your full name, phone number and location so booked crew and clients can reach you.{' '}
+          <button type="button" className="font-extrabold underline" onClick={openProfile}>Complete profile</button>
+        </div>
+      )}
       <main>
         <AnimatePresence mode="wait">
           {page === 'marketplace' ? (

@@ -313,3 +313,12 @@ test('call sheets: create, public view hides phones, owner-only edits, booked cr
   assert.equal((await client.a.del('/api/callsheets/' + sheet.id)).status, 200);
   assert.equal((await fetch(BASE + '/api/public/callsheets/' + sheet.token)).status, 404, 'deleted sheets stop working');
 });
+
+test('existing accounts without a phone or location are flagged and must complete their profile', async () => {
+  const u = await register('Legacy Person', 'client');
+  await pool.query('UPDATE users SET phone = NULL, location = NULL WHERE id = $1', [u.id]);
+  assert.equal((await u.a.get('/api/profile')).body.user.profileComplete, false);
+  assert.equal((await u.a.patch('/api/profile', { name: 'Legacy Person', phone: '', location: 'Lagos' })).status, 400);
+  const ok = await u.a.patch('/api/profile', { name: 'Legacy Person', phone: '+234 802 000 1111', location: 'Abuja' });
+  assert.equal(ok.status, 200); assert.equal(ok.body.user.profileComplete, true);
+});
