@@ -122,10 +122,7 @@ test('booking, acceptance, strict cancellation, payment via Bachs webhook, compl
   assert.equal((await crew.a.post(`/api/bookings/${bookingId}/offers/${msg}/respond`, { response: 'accepted' })).status, 200);
   assert.equal((await client.a.post(`/api/bookings/${bookingId}/cancel`, {})).status >= 400, true, 'no free cancellation once confirmed');
   await pool.query(`UPDATE users SET phone = '0803 555 0101' WHERE id = $1`, [crew.id]);
-  const cc = await client.a.get(`/api/bookings/${bookingId}/contact`); assert.equal(cc.body.available, true); assert.equal(cc.body.phone, '0803 555 0101', 'client sees crew phone once confirmed');
-  assert.equal((await crew.a.get(`/api/bookings/${bookingId}/contact`)).body.available, true);
-  const stranger = await register('Stranger', 'client');
-  assert.equal((await stranger.a.get(`/api/bookings/${bookingId}/contact`)).status >= 400, true, 'strangers get nothing');
+  assert.equal((await client.a.get(`/api/bookings/${bookingId}/contact`)).body.available, false, 'no contact details before payment');
   assert.equal((await crew.a.post('/api/payments/initialize', { booking_id: bookingId })).status, 403, 'only the client pays');
   const init = await client.a.post('/api/payments/initialize', { booking_id: bookingId }); assert.equal(init.status, 200, JSON.stringify(init.body));
   const cs = (await pool.query('SELECT checkout_id, gateway_reference FROM payments WHERE booking_id = $1', [bookingId])).rows[0];
@@ -141,6 +138,10 @@ test('booking, acceptance, strict cancellation, payment via Bachs webhook, compl
   assert.equal((await pool.query('SELECT payment_status FROM bookings WHERE id = $1', [bookingId])).rows[0].payment_status, 'paid');
   await post(s.raw, s.sig);
   assert.equal((await pool.query('SELECT COUNT(*)::int n FROM invoices WHERE booking_id = $1', [bookingId])).rows[0].n, 1, 'replay is idempotent');
+  const cc = await client.a.get(`/api/bookings/${bookingId}/contact`); assert.equal(cc.body.available, true); assert.equal(cc.body.phone, '0803 555 0101', 'client sees crew phone once confirmed');
+  assert.equal((await crew.a.get(`/api/bookings/${bookingId}/contact`)).body.available, true);
+  const stranger = await register('Stranger', 'client');
+  assert.equal((await stranger.a.get(`/api/bookings/${bookingId}/contact`)).status >= 400, true, 'strangers get nothing');
   assert.equal((await client.a.post(`/api/bookings/${bookingId}/complete`, {})).status, 409, 'cannot complete before the job starts');
   await pool.query(`UPDATE bookings SET start_date = CURRENT_DATE - 2, end_date = CURRENT_DATE - 2 WHERE id = $1`, [bookingId]);
   assert.equal((await crew.a.post(`/api/bookings/${bookingId}/complete`, {})).status, 403, 'only the client completes');

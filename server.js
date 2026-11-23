@@ -1638,7 +1638,7 @@ async function settleFromBachs(payment) {
         [invNo, bid, booking.client_name || 'Client', subtotal.toFixed(2), (total - subtotal).toFixed(2), total, SUPPLIER_TIN || null]);
       const crewId = (await crewUserIdsFor(db, booking.professional_id))[0];
       const sys = (await db.query(`INSERT INTO messages (booking_id,sender_type,sender_name,masked_content,kind,recipient_user_id) VALUES ($1,'system','System',$2,'system',$3) RETURNING *`,
-        [booking.id, 'Payment received. The booking is confirmed and paid.', crewId || null])).rows[0];
+        [booking.id, 'Payment received. The booking is now confirmed and paid. Contact details are available above.', crewId || null])).rows[0];
       done.push({ booking, sys, crewId });
     }
     await db.query(`UPDATE payments SET status = 'verified', raw_webhook = $2 WHERE id = $1`, [cur.id, JSON.stringify(session)]);
@@ -1872,10 +1872,10 @@ app.get('/api/bookings/:id/messages', requireUser, wrap(async (req, res) => {
   res.json(scrubMoney(rows, roleOf(req, b)));
 }));
 
-// Once a booking is confirmed, the two sides can see each other's contact details (never before).
+// Only once payment has succeeded, the two sides can see each other's contact details (never before).
 app.get('/api/bookings/:id/contact', requireUser, wrap(async (req, res) => {
   const b = await getAccessibleBooking(pool, req, req.params.id);
-  if (!['confirmed', 'in_progress', 'completion_review', 'completed'].includes(b.status)) return res.json({ available: false });
+  if (b.payment_status !== 'paid' || !['confirmed', 'in_progress', 'completion_review', 'completed'].includes(b.status)) return res.json({ available: false });
   let uid = null;
   if (ownsBooking(req.user, b)) uid = (await crewUserIdsFor(pool, b.professional_id))[0] || null;
   else uid = b.user_id != null ? Number(b.user_id) : null;
@@ -1976,7 +1976,7 @@ app.post('/api/bookings/:id/offers/:messageId/respond', requireUser, wrap(async 
       if (!holds) nextStatus = 'confirmed';
       await db.query(`UPDATE bookings SET start_date=$1, end_date=$2, booking_unit=$3, daily_rate=$4, client_total=$5, crew_net=$6, status=$7, crew_response='accepted', quantity=$9, schedule_kind=$10 WHERE id=$8`,
         [o.start_date, o.end_date, o.booking_unit, o.daily_rate, price.client_total, price.crew_net, nextStatus, b.id, price.quantity, o.schedule_kind || 'calendar']);
-      text = (holds ? 'Change accepted: ' : 'Booking confirmed: ') + offerSummary({ ...o, ...price });
+      text = (holds ? 'Change accepted: ' : 'Booking accepted: ') + offerSummary({ ...o, ...price }) + (holds ? '' : ' The client can now proceed to payment to secure this booking. Contact details are shared once payment is received.');
     } else {
       if (m.kind === 'request' && mine === 'crew') { nextStatus = 'declined'; text = 'Request declined.'; }
       else { if (!holds) nextStatus = 'awaiting_review'; text = 'Proposal declined.'; }
