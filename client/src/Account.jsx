@@ -526,7 +526,7 @@ export function MessageInbox({ open, onClose, onRead, user, initialBookingId }) 
   return (
     <AnimatePresence>
       {open && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[90] flex items-stretch justify-center overflow-hidden bg-[#0b142280] backdrop-blur-sm sm:items-center sm:p-3" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[90] flex items-stretch justify-center overflow-hidden bg-[#0b142280] sm:backdrop-blur-sm sm:items-center sm:p-3" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
           <motion.section initial={{ y: 24, opacity: 0, scale: .98 }} animate={{ y: 0, opacity: 1, scale: 1 }} exit={{ y: 16, opacity: 0 }} className="flex h-[100dvh] max-h-[100dvh] w-full min-h-0 max-w-5xl flex-col overflow-hidden rounded-none bg-white shadow-2xl sm:h-[90dvh] sm:max-h-[90dvh] sm:rounded-2xl">
             <header className={'items-center justify-between border-b border-line px-4 py-3 sm:px-5 ' + (selected ? 'hidden md:flex' : 'flex')}>
               <div><Tagline>Account inbox</Tagline><h2 className="font-display text-xl font-extrabold">Messages</h2></div>
