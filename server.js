@@ -2358,10 +2358,13 @@ app.post('/api/jobs/:id/apply', requireUser, requireApproved, requireVerifiedEma
   if (!job || job.status !== 'open') fail(404, 'This job is no longer open.');
   if (job.owner_id === req.user.id) fail(400, 'You cannot apply to your own job.');
   const mine = await crewProfessionalIds(pool, req.user);
-  const proId = toInt(b.professionalId) || mine[0];
-  if (!proId || !mine.includes(proId)) fail(403, 'Publish a crew profile first, then you can apply to jobs.');
-  const pro = (await pool.query(`SELECT name FROM professionals WHERE id = $1 AND status = 'approved' AND is_active = TRUE`, [proId])).rows[0];
-  if (!pro) fail(403, 'Your crew profile must be approved and active to apply.');
+  if (!mine.length) fail(403, 'Publish a crew profile first, then you can apply to jobs.');
+  // Apply with a listing that is approved and live. A user can own several (paused, removed or pending ones too), so do not just take the first.
+  const wanted = toInt(b.professionalId);
+  if (wanted && !mine.includes(wanted)) fail(403, 'That listing is not yours.');
+  const pro = (await pool.query(`SELECT id, name FROM professionals WHERE id = ANY($1::int[]) AND ($2::int IS NULL OR id = $2::int) AND status = 'approved' AND is_active = TRUE ORDER BY id LIMIT 1`, [mine, wanted || null])).rows[0];
+  if (!pro) fail(403, 'You need an approved, live listing to apply. Check My listing: it must be approved by an admin and not paused.');
+  const proId = pro.id;
   const message = str(b.message, 1500), quote = b.quote === '' || b.quote == null ? null : Number(b.quote);
   if (message.length < 10) fail(400, 'Tell the booker why you are a good fit (a few words is fine).');
   if (quote != null && (!Number.isSafeInteger(quote) || quote < 1 || quote > 100000000)) fail(400, 'Enter your quote as a whole number of naira.');
