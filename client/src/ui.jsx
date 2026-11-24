@@ -24,7 +24,7 @@ export function Button({ variant = 'lime', size = 'md', className, children, ...
 }
 
 /* ---------- Form bits ---------- */
-export const inputCls = 'w-full rounded-xl border border-[#e2e7e9] bg-white px-3.5 py-3 text-sm text-ink outline-none transition hover:border-[#c9d2da] focus:border-[#8cab48] focus:shadow-[0_0_0_3px_#c9f36a50] read-only:bg-[#f5f7f3] disabled:bg-[#f5f7f3] disabled:text-muted';
+export const inputCls = 'w-full rounded-xl border border-[#e2e7e9] bg-white px-3.5 py-3 text-base sm:text-sm text-ink outline-none transition hover:border-[#c9d2da] focus:border-[#8cab48] focus:shadow-[0_0_0_3px_#c9f36a50] read-only:bg-[#f5f7f3] disabled:bg-[#f5f7f3] disabled:text-muted';
 export function Field({ label, htmlFor, full, className, children }) {
   return (
     <div className={cn('flex flex-col gap-1.5', full && 'sm:col-span-2', className)}>

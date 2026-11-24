@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { AuthModal, BookingModal, GroupModal, JoinModal, LegalModal, ResetModal } from './modals.jsx';
 import { MessageInbox, ProfilePage } from './Account.jsx';
@@ -38,6 +38,8 @@ function Shell() {
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [incomingMessage, setIncomingMessage] = useState(null);
   const [messagePopupsEnabled, setMessagePopupsEnabled] = useState(true);
+  const popupsRef = useRef(true), inboxOpenRef = useRef(false);
+  popupsRef.current = messagePopupsEnabled; inboxOpenRef.current = inboxOpen;
 
   const refreshProfessionals = useCallback(async () => {
     const r = await http('/api/professionals').catch(() => ({ ok: false, data: {} }));
@@ -72,11 +74,11 @@ function Shell() {
       let message;
       try { message = JSON.parse(event.data); } catch { return; }
       if (!active) return;
-      if (messagePopupsEnabled && !inboxOpen) setIncomingMessage(message);
+      if (popupsRef.current && !inboxOpenRef.current) setIncomingMessage(message);
       refreshUnread();
     };
     return () => { active = false; stream.close(); };
-  }, [user?.id, messagePopupsEnabled, inboxOpen, refreshUnread]);
+  }, [user?.id, refreshUnread]); // popups/inbox state is read through refs so opening the inbox does not tear down and reopen the stream
 
   // Links from emails: ?reset=<token>, ?verify=<token>, ?inbox=<booking id>
   const [resetToken, setResetToken] = useState('');
