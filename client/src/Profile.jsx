@@ -105,16 +105,34 @@ async function shrink(file) {
 }
 export function PortfolioManager({ listingId, toast }) {
   const [items, setItems] = useState(null); const [busy, setBusy] = useState(false); const [link, setLink] = useState(''); const [cap, setCap] = useState(''); const fileRef = useRef(null);
+  const [staged, setStaged] = useState([]); // photos chosen but not saved yet: { file, url }
+  useEffect(() => () => staged.forEach(x => URL.revokeObjectURL(x.url)), [staged]);
   const load = () => http('/api/professionals/' + listingId + '/portfolio').then(r => setItems(r.ok ? r.data : [])).catch(() => setItems([]));
   useEffect(() => { setItems(null); load(); }, [listingId]);
   async function add(body) { setBusy(true); const r = await postJSON('/api/crew/listings/' + listingId + '/portfolio', { ...body, caption: cap }).catch(() => ({ ok: false, data: {} })); setBusy(false); if (!r.ok) { toast(r.data.error || 'Could not add that.'); return false; } setCap(''); load(); return true; }
-  async function pick(e) { const files = [...(e.target.files || [])]; e.target.value = ''; for (const f of files.slice(0, 6)) { try { if (!(await add({ kind: 'image', data_base64: await shrink(f) }))) break; } catch { toast('That file is not a photo we can read.'); } } }
+  function pick(e) {
+    const files = [...(e.target.files || [])]; e.target.value = '';
+    if (!files.length) return;
+    setStaged(list => [...list, ...files.map(file => ({ file, url: URL.createObjectURL(file) }))].slice(0, 6));
+  }
+  async function saveStaged() {
+    if (!staged.length || busy) return;
+    const rest = [];
+    let saved = 0;
+    for (const x of staged) {
+      if (rest.length) { rest.push(x); continue; }
+      try { if (await add({ kind: 'image', data_base64: await shrink(x.file) })) saved++; else rest.push(x); } catch { toast('That file is not a photo we can read.'); }
+    }
+    setStaged(rest);
+    if (saved) toast(saved === 1 ? 'Photo saved to your portfolio.' : saved + ' photos saved to your portfolio.');
+  }
   async function del(it) { const r = await http('/api/crew/listings/' + listingId + '/portfolio/' + it.id, { method: 'DELETE' }).catch(() => ({ ok: false })); toast(r.ok ? 'Removed.' : 'Could not remove it.'); load(); }
   return (
     <div className="mt-4 rounded-xl border border-line p-3.5">
       <p className="font-display font-extrabold">Portfolio</p><p className="text-xs text-muted">Photos and videos play inside your profile as a grid, like Instagram. Up to 24 items.</p>
       <div className="mt-3 grid grid-cols-4 gap-1.5 sm:grid-cols-6">{items?.map(it => <div key={it.id} className="group relative aspect-square overflow-hidden rounded-md bg-[#e9eef0]">{it.kind === 'image' ? <img src={it.url} alt="" className="size-full object-cover" /> : <div className="grid size-full place-items-center bg-ink p-1 text-center text-[10px] font-bold text-white">{host(it.url)}</div>}<button aria-label="Remove item" onClick={() => del(it)} className="absolute right-1 top-1 grid size-6 place-items-center rounded-full bg-white/90"><X className="size-3" /></button></div>)}</div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]"><input aria-label="Caption" className={inputCls} maxLength={140} value={cap} onChange={e => setCap(e.target.value)} placeholder="Caption (optional)" /><input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" multiple className="sr-only" onChange={pick} aria-label="Upload portfolio photos" /><Button size="sm" variant="ghost" disabled={busy} onClick={() => fileRef.current?.click()}>{busy ? 'Adding…' : 'Add photos'}</Button></div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]"><input aria-label="Caption" className={inputCls} maxLength={140} value={cap} onChange={e => setCap(e.target.value)} placeholder="Caption (optional)" /><input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" multiple className="sr-only" onChange={pick} aria-label="Upload portfolio photos" /><Button size="sm" variant="ghost" disabled={busy} onClick={() => fileRef.current?.click()}>Choose photos</Button></div>
+      {!!staged.length && <div className="mt-3 rounded-lg bg-[#f7f9f2] p-2.5"><div className="grid grid-cols-4 gap-1.5 sm:grid-cols-6">{staged.map((x, i) => <div key={x.url} className="relative aspect-square overflow-hidden rounded-md ring-2 ring-[#8cab48]"><img src={x.url} alt="" className="size-full object-cover" /><button type="button" aria-label="Remove this photo" disabled={busy} onClick={() => setStaged(list => list.filter((_, j) => j !== i))} className="absolute right-1 top-1 grid size-6 place-items-center rounded-full bg-black/70 text-xs font-bold text-white">×</button></div>)}</div><div className="mt-2 flex flex-wrap gap-2"><Button size="sm" disabled={busy} onClick={saveStaged}>{busy ? 'Saving…' : staged.length === 1 ? 'Save photo' : 'Save ' + staged.length + ' photos'}</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => setStaged([])}>Discard</Button></div><p className="mt-1.5 text-[11px] text-muted">These are not on your profile until you save.</p></div>}
       <form className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]" onSubmit={async e => { e.preventDefault(); if (await add({ kind: 'link', url: link })) setLink(''); }}><input aria-label="Video link" className={inputCls} inputMode="url" value={link} onChange={e => setLink(e.target.value)} placeholder="YouTube or Vimeo link" /><Button size="sm" variant="ghost" type="submit" disabled={busy || !link}>Add link</Button></form>
     </div>
   );

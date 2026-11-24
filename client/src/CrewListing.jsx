@@ -17,6 +17,9 @@ export default function CrewListing({ toast }) {
   const [saving, setSaving] = useState(false);
   const [block, setBlock] = useState({ start: '', end: '' });
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [stagedPhoto, setStagedPhoto] = useState(null); // { file, url } chosen but not saved yet
+  useEffect(() => () => { if (stagedPhoto) URL.revokeObjectURL(stagedPhoto.url); }, [stagedPhoto]);
+  useEffect(() => { setStagedPhoto(null); }, [selectedId]);
   const fileRef = useRef(null);
   const selected = listings.find(x => Number(x.id) === Number(selectedId)) || null;
 
@@ -69,17 +72,22 @@ export default function CrewListing({ toast }) {
     toast(r.ok ? 'Listing deleted.' : (r.data.error || 'Could not delete the listing.'));
     if (r.ok) load();
   }
-  async function pickPhoto(e) {
+  function pickPhoto(e) {
     const file = e.target.files?.[0]; e.target.value = '';
     if (!file || !selected) return;
     if (file.size > 2 * 1024 * 1024) { toast('Choose a photo under 2 MB.'); return; }
+    setStagedPhoto({ file, url: URL.createObjectURL(file) });
+  }
+  async function savePhoto() {
+    if (!stagedPhoto || !selected) return;
     setPhotoBusy(true);
     try {
+      const file = stagedPhoto.file;
       const bytes = new Uint8Array(await file.arrayBuffer()); let bin = '';
       for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
       const r = await postJSON('/api/crew/listings/' + selected.id + '/photo', { mime_type: file.type, data_base64: btoa(bin) });
       if (!r.ok) throw new Error(r.data.error || 'Could not upload the photo.');
-      toast('Listing photo updated.'); await load(selected.id);
+      setStagedPhoto(null); toast('Listing photo saved.'); await load(selected.id);
     } catch (err) { toast(err.message); } finally { setPhotoBusy(false); }
   }
   async function removePhoto() {
@@ -121,7 +129,7 @@ export default function CrewListing({ toast }) {
             <Field label="How do you charge?" htmlFor="clUnit"><select id="clUnit" className={inputCls} value={form.rateUnit} onChange={set('rateUnit')}><option value="day">Per day (full or half day)</option><option value="hour">Per hour</option><option value="project">Flat project fee</option></select></Field>
             <Field label={form.rateUnit === 'hour' ? 'Hourly rate (₦)' : form.rateUnit === 'project' ? 'Starting project fee (₦)' : 'Daily rate (₦)'} htmlFor="clRate"><input id="clRate" type="number" min="1000" max="10000000" step="500" className={inputCls} required value={form.rate} onChange={set('rate')} /></Field>
             <Field label="Skills (comma separated)" htmlFor="clSkills" full><input id="clSkills" className={inputCls} value={form.skills} onChange={set('skills')} placeholder="Steadicam, Drone, Anamorphic" /></Field>
-            <Field label="About this service" htmlFor="clBio" full><textarea id="clBio" className={inputCls + ' min-h-24'} maxLength={1000} value={form.bio} onChange={set('bio')} placeholder="Describe your experience and the work you offer." /></Field>
+            <Field label="About this service (required, at least 20 characters)" htmlFor="clBio" full><textarea id="clBio" className={inputCls + ' min-h-24'} required minLength={20} maxLength={1000} value={form.bio} onChange={set('bio')} placeholder="Describe your experience and the work you offer." /></Field>
             <div className="flex flex-wrap gap-2 sm:col-span-2"><Button type="submit" disabled={saving}>{saving ? 'Saving…' : selectedId ? 'Save listing changes' : 'Publish new listing'}</Button><Button type="button" variant="ghost" onClick={() => { setEditing(false); if (selected) setForm(toForm(selected)); else setForm(emptyForm); }}>Cancel</Button></div>
           </form>
         )}
@@ -136,8 +144,14 @@ export default function CrewListing({ toast }) {
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-3">
               <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={pickPhoto} aria-label="Upload listing photo" />
-              <Button size="sm" variant="ghost" disabled={photoBusy} onClick={() => fileRef.current?.click()}>{photoBusy ? 'Uploading…' : selected.photo ? 'Change photo' : 'Upload photo'}</Button>
-              {selected.photo && <Button size="sm" variant="ghost" onClick={removePhoto}>Remove photo</Button>}
+              {stagedPhoto ? (
+                <>
+                  <img src={stagedPhoto.url} alt="Selected photo preview" className="size-14 rounded-xl object-cover ring-2 ring-[#8cab48]" />
+                  <Button size="sm" disabled={photoBusy} onClick={savePhoto}>{photoBusy ? 'Saving…' : 'Save photo'}</Button>
+                  <Button size="sm" variant="ghost" disabled={photoBusy} onClick={() => setStagedPhoto(null)}>Cancel</Button>
+                </>
+              ) : <Button size="sm" variant="ghost" onClick={() => fileRef.current?.click()}>{selected.photo ? 'Change photo' : 'Upload photo'}</Button>}
+              {selected.photo && !stagedPhoto && <Button size="sm" variant="ghost" onClick={removePhoto}>Remove photo</Button>}
             </div>
             {selected.bio && <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-muted">{selected.bio}</p>}
             <PortfolioManager listingId={selected.id} toast={toast} />

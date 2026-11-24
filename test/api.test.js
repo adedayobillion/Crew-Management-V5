@@ -102,6 +102,9 @@ test('crew publishes a listing, edits it, blocks dates; photos are validated', a
   assert.equal(pub.status, 201, JSON.stringify(pub.body)); listingId = pub.body.listing.id;
   assert.equal((await agent().get('/api/professionals')).body.professionals.length, 1);
   assert.equal((await crew.a.patch('/api/crew/listing', { rate: 5 })).status, 400);
+  assert.equal((await crew.a.patch('/api/crew/listing', { bio: '' })).status, 400, 'the bio cannot be cleared');
+  assert.equal((await crew.a.patch('/api/crew/listing', { bio: 'Too short' })).status, 400, 'the bio needs 20+ characters');
+  assert.equal((await crew.a.patch('/api/crew/listing', { bio: 'Ten years shooting commercials and features across West Africa.' })).status, 200);
   assert.equal((await crew.a.patch('/api/crew/listing', { rate: 70000, skills: 'Drone, Steadicam', showreel: 'https://vimeo.com/1' })).status, 200);
   assert.equal((await crew.a.patch('/api/crew/listing', { showreel: 'http://insecure.example' })).status, 400);
   assert.equal((await client.a.patch('/api/crew/listings/' + listingId, { rate: 1000 })).status, 404, 'others cannot edit');
@@ -209,7 +212,7 @@ test('group booking creates one linked request per crew member', async () => {
   // same person, overlapping dates: no second booking, even under another role
   const again = await client.a.post('/api/bookings', { professionalId: listingId, startDate: d, endDate: d, message: 'again' });
   assert.equal(again.status, 409, 'duplicate booking for the same dates is refused');
-  const l3 = (await crew2.a.post('/api/crew/listings', { role: 'Gaffer', category: 'Lighting', location: 'Lagos', rate: 25000, bio: 'Lights' })).body;
+  const l3 = (await crew2.a.post('/api/crew/listings', { role: 'Gaffer', category: 'Lighting', location: 'Lagos', rate: 25000, bio: 'Lighting for film and commercial sets across Lagos.' })).body;
   const l3id = l3.listing && l3.listing.id;
   assert.ok(l3id, JSON.stringify(l3)); assert.equal((await client.a.post('/api/group-bookings', { professionalIds: [l2, l3id], title: 'Twice', startDate: d, endDate: d })).status, 409, 'one person cannot be booked under two roles on the same dates');
   // read receipts: the sender's message is "seen" only after the other side marks it read
@@ -247,8 +250,8 @@ test('group booking creates one linked request per crew member', async () => {
 
 test('hourly and flat-fee listings: quantity, delivery date, calendar blocking', async () => {
   const hr = await register('Hourly Crew', 'crew'); await pool.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [hr.id]);
-  const lh = (await hr.a.post('/api/crew/listings', { role: 'Editor', category: 'Editing', location: 'Lagos', rate: 10000, rateUnit: 'hour', bio: 'Edits' })).body.listing;
-  const lp = (await hr.a.post('/api/crew/listings', { role: 'Colourist', category: 'Editing', location: 'Lagos', rate: 150000, rateUnit: 'project', bio: 'Grades' })).body.listing;
+  const lh = (await hr.a.post('/api/crew/listings', { role: 'Editor', category: 'Editing', location: 'Lagos', rate: 10000, rateUnit: 'hour', bio: 'Editing for film and commercial work, fast turnaround.' })).body.listing;
+  const lp = (await hr.a.post('/api/crew/listings', { role: 'Colourist', category: 'Editing', location: 'Lagos', rate: 150000, rateUnit: 'project', bio: 'Colour grading for film and commercial work, full pipeline.' })).body.listing;
   assert.equal(lh.rate_unit, 'hour'); assert.equal(lp.rate_unit, 'project');
   const d = tomorrow(60), d2 = tomorrow(63);
   assert.equal((await client.a.post('/api/bookings', { professionalId: lh.id, startDate: d, quantity: 0 })).status, 400, 'hours required');
@@ -361,7 +364,7 @@ test('job board: post, apply, owner-only review, accept opens a booking', async 
 });
 
 test('crew can delete a listing, unless it has open bookings', async () => {
-  const c = await register('Del Crew', 'crew'); await pool.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [c.id]); const p = await c.a.post('/api/crew/listings', { role: 'Gaffer', category: 'Lighting', location: 'Lagos', rate: 50000, bio: 'Lighting for film sets.', skills: ['LED'] });
+  const c = await register('Del Crew', 'crew'); await pool.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [c.id]); const p = await c.a.post('/api/crew/listings', { role: 'Gaffer', category: 'Lighting', location: 'Lagos', rate: 50000, bio: 'Lighting for film and commercial sets across Lagos.', skills: ['LED'] });
   assert.equal(p.status, 201, JSON.stringify(p.body)); const id = p.body.listing.id;
   assert.equal((await client.a.del('/api/crew/listings/' + id)).status >= 400, true, 'only the owner deletes');
   const d = await c.a.del('/api/crew/listings/' + id); assert.equal(d.status, 200, JSON.stringify(d.body));

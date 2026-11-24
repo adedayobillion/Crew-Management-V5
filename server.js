@@ -1199,13 +1199,14 @@ app.get('/api/crew/listing', requireUser, wrap(async (req, res) => {
   const listings = rows.map(listingView);
   res.json({ listings, listing: listings[0] || null, blocks });
 }));
+const BIO_MIN = 20, BIO_MSG = 'Write at least 20 characters about your experience and the work you offer. Clients read this before booking.';
 async function updateCrewListing(req, res, listingId) {
   const p = await myListing(pool, req.user, listingId), b = req.body || {}, sets = [], vals = [];
   const add = (col, cast, v) => { vals.push(v); sets.push(`${col} = $${vals.length}::${cast}`); };
   if (b.role !== undefined) { const v = str(b.role, 80); if (v.length < 2) fail(400, 'Enter your role, for example Director of Photography.'); add('role', 'text', v); }
   if (b.category !== undefined) add('category', 'text', str(b.category, 60) || null);
   if (b.location !== undefined) add('location', 'text', str(b.location, 120) || null);
-  if (b.bio !== undefined) { const v = str(b.bio, 1000) || null; add('bio', 'text', v); add('"desc"', 'text', v || ''); add('description', 'text', v || ''); } // legacy description/desc columns can be NOT NULL in existing databases
+  if (b.bio !== undefined) { const v = str(b.bio, 1000) || null; if (!v || v.length < BIO_MIN) fail(400, BIO_MSG); add('bio', 'text', v); add('"desc"', 'text', v); add('description', 'text', v); }
   if (b.rate !== undefined) {
     const r = Math.round(Number(b.rate));
     if (!Number.isFinite(r) || r < 1000 || r > 10000000) fail(400, 'Enter a rate between ₦1,000 and ₦10,000,000.');
@@ -1253,6 +1254,7 @@ app.post('/api/crew/listings', requireUser, requireVerifiedEmail, wrap(async (re
   const rate = Math.round(Number(b.rate)); const rateUnit = RATE_UNITS.includes(b.rateUnit) ? b.rateUnit : 'day';
   const skills = (Array.isArray(b.skills) ? b.skills : String(b.skills || '').split(',')).map(x => str(x, 40)).filter(Boolean);
   if (role.length < 2) fail(400, 'Enter a role for this listing.');
+  if (bio.length < BIO_MIN) fail(400, BIO_MSG);
   if (!category) fail(400, 'Choose a valid category.');
   if (!Number.isFinite(rate) || rate < 1000 || rate > 10000000) fail(400, 'Enter a rate between ₦1,000 and ₦10,000,000.');
   if (skills.length > 15) fail(400, 'Add at most 15 skills.');
