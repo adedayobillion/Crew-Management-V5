@@ -129,6 +129,9 @@ test('booking, acceptance, strict cancellation, payment via Bachs webhook, compl
   assert.equal((await crew.a.post('/api/payments/initialize', { booking_id: bookingId })).status, 403, 'only the client pays');
   const init = await client.a.post('/api/payments/initialize', { booking_id: bookingId }); assert.equal(init.status, 200, JSON.stringify(init.body));
   const cs = (await pool.query('SELECT checkout_id, gateway_reference FROM payments WHERE booking_id = $1', [bookingId])).rows[0];
+  const grp = (await pool.query(`INSERT INTO payments (booking_id, booking_ids, gateway, gateway_reference, amount, currency, status) VALUES ($1, ARRAY[$1::int], 'bachs', 'TXN-GRPGUARD', 1, 'NGN', 'pending') RETURNING id`, [bookingId])).rows[0];
+  assert.equal((await client.a.post('/api/payments/initialize', { booking_id: bookingId })).status, 409, 'no single checkout while a group checkout covers the booking');
+  await pool.query('DELETE FROM payments WHERE id = $1', [grp.id]);
   const ev = { type: 'checkout.session.completed', data: { checkout_id: cs.checkout_id, reference: cs.gateway_reference } };
   const post = (raw, sig) => fetch(BASE + '/api/payments/webhook', { method: 'POST', headers: { 'content-type': 'application/json', 'x-bachs-signature-v2': sig }, body: raw });
   const s = signed(ev);
@@ -360,6 +363,7 @@ test('job board: post, apply, owner-only review, accept opens a booking', async 
   assert.equal((await crew.a.post(`/api/jobs/${id}/applications/${app.id}/accept`, {})).status, 404, 'only the owner can accept');
   const acc = await client.a.post(`/api/jobs/${id}/applications/${app.id}/accept`, {}); assert.equal(acc.status, 201, JSON.stringify(acc.body));
   assert.ok(acc.body.booking.id, 'accepting opens a booking request');
+  assert.equal(Number((await pool.query('SELECT daily_rate FROM bookings WHERE id = $1', [acc.body.booking.id])).rows[0].daily_rate), 140000, 'the accepted quote becomes the booking rate');
   assert.equal((await agent().get('/api/jobs')).body.jobs.some(j => j.id === id), false, 'filled jobs leave the board');
 });
 
@@ -370,4 +374,24 @@ test('crew can delete a listing, unless it has open bookings', async () => {
   const d = await c.a.del('/api/crew/listings/' + id); assert.equal(d.status, 200, JSON.stringify(d.body));
   assert.equal((await c.a.get('/api/crew/listing')).body.listings.some(l => l.id === id), false, 'gone from the crew dashboard');
   assert.equal((await agent().get('/api/professionals')).body.professionals.some(x => x.id === id), false, 'gone from the marketplace');
+});
+
+test('login throttle is stored in the database and survives a restart', async () => {
+  const u = await register('Throttle User', 'client'); const bad = () => agent().post('/api/auth/login', { email: u.email, password: 'wrongpassword1' });
+  for (let i = 0; i < 8; i++) assert.equal((await bad()).status, 401);
+  assert.equal((await bad()).status, 429, 'blocked after 8 failures');
+  assert.equal((await pool.query('SELECT n FROM login_throttle WHERE email = $1', [u.email.toLowerCase()])).rows[0].n, 8, 'the count lives in Postgres');
+  await pool.query('DELETE FROM login_throttle WHERE email = $1', [u.email.toLowerCase()]);
+  assert.equal((await agent().post('/api/auth/login', { email: u.email, password: 'password123456' })).status === 429, false);
+});
+
+test('admin can restore a removed listing', async () => {
+  const c = await register('Restore Crew', 'crew'); await pool.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [c.id]);
+  const p = await c.a.post('/api/crew/listings', { role: 'Gaffer', category: 'Lighting', location: 'Lagos', rate: 50000, bio: 'Lighting for film and commercial sets across Lagos.', skills: ['LED'] }); const id = p.body.listing.id;
+  const ADM = { 'x-admin-token': ADMIN_TOKEN, 'content-type': 'application/json', 'x-requested-with': 'cma-admin' };
+  const call = (path, method) => fetch(BASE + path, { method, headers: ADM }).then(async r => ({ status: r.status, body: await r.json().catch(() => ({})) }));
+  assert.equal((await call('/api/admin/listings/' + id + '/restore', 'POST')).status, 409, 'only removed listings can be restored');
+  assert.equal((await c.a.del('/api/crew/listings/' + id)).status, 200);
+  assert.equal((await call('/api/admin/listings/' + id + '/restore', 'POST')).status, 200);
+  assert.equal((await agent().get('/api/professionals')).body.professionals.some(x => x.id === id), true, 'back on the marketplace');
 });

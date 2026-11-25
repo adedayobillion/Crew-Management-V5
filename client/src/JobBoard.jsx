@@ -100,7 +100,7 @@ export function JobBoard({ user, onLogin, toast, onBack, onOpenMessages }) {
                     : applying === j.id ? (
                       <div className="grid gap-2.5 rounded-xl bg-[#f7f9f6] p-3">
                         <Field label="Why you are a good fit" htmlFor={'ap' + j.id}><textarea id={'ap' + j.id} className={cn(inputCls, 'min-h-20')} maxLength={1500} value={ap.message} onChange={e => setAp(s => ({ ...s, message: e.target.value }))} placeholder="Your experience, gear and availability" /></Field>
-                        <Field label="Your quote in naira (optional)" htmlFor={'aq' + j.id}><input id={'aq' + j.id} inputMode="numeric" className={inputCls} value={ap.quote} onChange={e => setAp(s => ({ ...s, quote: e.target.value.replace(/\D/g, '') }))} /></Field>
+                        <Field label="Your rate for this job, in naira (optional)" htmlFor={'aq' + j.id}><input id={'aq' + j.id} inputMode="numeric" className={inputCls} value={ap.quote} onChange={e => setAp(s => ({ ...s, quote: e.target.value.replace(/\D/g, '') }))} /></Field>
                         <div className="flex gap-2"><Button size="sm" variant="dark" disabled={busy} onClick={() => apply(j)}>{busy ? 'Sending…' : 'Send application'}</Button><Button size="sm" variant="ghost" onClick={() => setApplying(null)}>Cancel</Button></div>
                         <p className="text-[11px] text-muted">You need an approved crew profile to apply. Agree the final price in chat if you are hired.</p>
                       </div>
