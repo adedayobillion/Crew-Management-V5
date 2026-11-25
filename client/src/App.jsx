@@ -184,7 +184,9 @@ function Shell() {
   };
   const openJoin = async () => {
     if (!user) { openAuth('register', () => setJoinOpen(true), 'crew'); toast('Create an account to apply to the crew network.'); return; }
-    if (await ensureMode('crew')) setJoinOpen(true);
+    if (!(await ensureMode('crew'))) return;
+    if (user.isVerified) { toast('You are already a verified crew member. Start listing your services.'); openCrewDashboard(); return; }
+    setJoinOpen(true);
   };
   async function logout() {
     try { await postJSON('/api/auth/logout', {}); } finally { setUser(null); showPage('marketplace'); toast('You have been signed out.'); }
