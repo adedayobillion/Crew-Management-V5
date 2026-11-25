@@ -2728,7 +2728,7 @@ app.use('/api', (req, res) => res.status(404).json({ error: `API route not found
 
 // Link previews need absolute image URLs, so the page is served with the real origin filled in.
 let indexTemplate = null;
-app.get('*', (req, res, next) => {
+app.get('/{*splat}', (req, res, next) => {
   try {
     if (!indexTemplate) indexTemplate = require('fs').readFileSync(path.join(__dirname, 'dist', 'index.html'), 'utf8');
   } catch (e) { return next(e); }
