@@ -524,6 +524,7 @@ async function initDb() {
         id SERIAL PRIMARY KEY, job_id INT NOT NULL, user_id INT NOT NULL, professional_id INT NOT NULL, message TEXT, quote INT,
         status VARCHAR(20) NOT NULL DEFAULT 'pending', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE (job_id, professional_id)
       );
+      CREATE TABLE IF NOT EXISTS login_throttle (email VARCHAR(254) PRIMARY KEY, n INT NOT NULL DEFAULT 0, until_at TIMESTAMPTZ NOT NULL);
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS outcome VARCHAR(20);
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS resolved_by VARCHAR(80);
       ALTER TABLE disputes ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP;
@@ -965,19 +966,28 @@ app.post('/api/auth/register', authLimiter, wrap(async (req, res) => {
 }));
 
 // Per-account throttle on top of the per-IP limiter, so one account cannot be guessed at from many addresses.
-const loginFails = new Map();
-const LOGIN_MAX = 8, LOGIN_WINDOW = 15 * 60 * 1000;
-function loginBlocked(email) { const f = loginFails.get(email); if (!f) return false; if (f.until < Date.now()) { loginFails.delete(email); return false; } return f.n >= LOGIN_MAX; }
-function loginFailed(email) { const f = loginFails.get(email); if (!f || f.until < Date.now()) loginFails.set(email, { n: 1, until: Date.now() + LOGIN_WINDOW }); else f.n++; if (loginFails.size > 50000) loginFails.clear(); }
+// Stored in Postgres so the count survives restarts and is shared by every server instance.
+const LOGIN_MAX = 8, LOGIN_WINDOW_MIN = 15;
+async function loginBlocked(email) {
+  const r = (await pool.query('SELECT n, until_at FROM login_throttle WHERE email = $1', [email])).rows[0];
+  if (!r) return false;
+  if (new Date(r.until_at) < new Date()) { await pool.query('DELETE FROM login_throttle WHERE email = $1', [email]); return false; }
+  return r.n >= LOGIN_MAX;
+}
+async function loginFailed(email) {
+  await pool.query(`INSERT INTO login_throttle (email, n, until_at) VALUES ($1, 1, NOW() + INTERVAL '${LOGIN_WINDOW_MIN} minutes')
+    ON CONFLICT (email) DO UPDATE SET n = CASE WHEN login_throttle.until_at < NOW() THEN 1 ELSE login_throttle.n + 1 END,
+      until_at = CASE WHEN login_throttle.until_at < NOW() THEN NOW() + INTERVAL '${LOGIN_WINDOW_MIN} minutes' ELSE login_throttle.until_at END`, [email]);
+}
 app.post('/api/auth/login', authLimiter, wrap(async (req, res) => {
   const email = str(req.body.email, 254).toLowerCase();
-  if (loginBlocked(email)) fail(429, 'Too many failed attempts for this account. Wait 15 minutes or reset your password.');
+  if (await loginBlocked(email)) fail(429, 'Too many failed attempts for this account. Wait 15 minutes or reset your password.');
   const password = String(req.body.password || '').slice(0, 200);
   const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
   const u = rows[0];
   const ok = await bcrypt.compare(password, u ? u.password_hash : DUMMY_HASH);
-  if (!u || !ok) { loginFailed(email); fail(401, 'Incorrect email or password.'); }
-  loginFails.delete(email);
+  if (!u || !ok) { await loginFailed(email); fail(401, 'Incorrect email or password.'); }
+  await pool.query('DELETE FROM login_throttle WHERE email = $1', [email]);
   if (u.is_suspended || u.account_status === 'rejected') fail(403, 'This account is not active. Please contact support.');
   await startSession(res, u.id);
   res.json({ success: true, user: publicUser(u) });
@@ -1474,11 +1484,11 @@ function pushChat(b, row, recipientId, user) {
 const setOfferStatus = (db, messageId, status) => db.query(`UPDATE messages SET offer = jsonb_set(offer, '{status}', to_jsonb($2::text)) WHERE id = $1 RETURNING *`, [messageId, status]);
 
 // Creates one booking request (and its chat thread) for one professional. Shared by single and group requests.
-async function createBookingRequest(db, user, proId, body, note, group) {
+async function createBookingRequest(db, user, proId, body, note, group, rateOverride) {
   const p = (await db.query(`SELECT id, name, role, rate, rate_unit FROM professionals WHERE id = $1 AND status = 'approved' AND is_active = TRUE FOR UPDATE`, [proId])).rows[0];
   if (!p) fail(404, 'This crew member is not available.');
   if (group && rateUnitOf(p.rate_unit) !== 'day') fail(400, p.name + ' is priced per ' + (p.rate_unit === 'hour' ? 'hour' : 'project') + '. Book them on their own instead of in a group.');
-  const o = parseProposal({ ...body, dailyRate: undefined }, p.rate, p.rate_unit); // the client cannot set the rate on a first request
+  const o = parseProposal({ ...body, dailyRate: rateOverride || undefined }, p.rate, p.rate_unit); // a client cannot set the rate on a first request; only an accepted job quote can
   const clash = o.schedule_kind === 'delivery' ? { rows: [] } : await db.query(`SELECT 1 FROM availability_blocks WHERE professional_id = $1 AND NOT (end_date < $2 OR start_date > $3) LIMIT 1`, [proId, o.start_date, o.end_date]);
   if (clash.rows.length) fail(409, (group ? p.name + ' is' : 'This professional is') + ' not available for the requested dates.');
   // One person, one booking per client for the same dates, even if they list several roles.
@@ -1746,6 +1756,8 @@ app.post('/api/payments/initialize', requireUser, requireVerifiedEmail, wrap(asy
   if (['cancelled', 'declined', 'refunded', 'expired'].includes(b.status)) fail(409, 'This booking cannot be paid.');
   if (!BLOCKING_STATUSES.includes(b.status)) fail(409, 'You can pay once the crew member has accepted this booking.');
   if (b.payment_status === 'paid') fail(409, 'This booking is already paid.');
+  const inGroup = (await pool.query(`SELECT 1 FROM payments WHERE booking_ids @> ARRAY[$1::int] AND status = 'pending' AND created_at > NOW() - INTERVAL '25 minutes' LIMIT 1`, [b.id])).rows.length;
+  if (inGroup) fail(409, 'A group checkout that includes this booking is already open. Finish it, or wait a few minutes and try again.');
   const amount = Number(b.client_total);
   if (!(amount > 0)) fail(400, 'This booking has no payable amount.');
   // Re-use a recent open checkout instead of creating duplicates when the client taps Pay twice.
@@ -1783,6 +1795,8 @@ app.post('/api/payments/initialize-group', requireUser, requireVerifiedEmail, wr
   const due = rows.filter(b => BLOCKING_STATUSES.includes(b.status) && b.payment_status !== 'paid' && b.payment_status !== 'refunded' && Number(b.client_total) > 0);
   if (!due.length) fail(409, 'Nothing in this group is ready to pay yet. You can pay once crew members accept.');
   const ids = due.map(b => b.id);
+  const single = (await pool.query(`SELECT 1 FROM payments WHERE booking_id = ANY($1::int[]) AND booking_ids IS NULL AND status = 'pending' AND created_at > NOW() - INTERVAL '25 minutes' LIMIT 1`, [ids])).rows.length;
+  if (single) fail(409, 'One of these bookings already has a checkout open. Finish it, or wait a few minutes and try again.');
   const amount = due.reduce((t, b) => t + Number(b.client_total), 0);
   const open = (await pool.query(`SELECT * FROM payments WHERE booking_ids = $1::int[] AND status = 'pending' AND checkout_url IS NOT NULL AND amount = $2 AND created_at > NOW() - INTERVAL '25 minutes' ORDER BY id DESC LIMIT 1`, [ids, amount])).rows[0];
   if (open) return res.json({ success: true, reference: open.gateway_reference, amount, count: ids.length, checkout_url: open.checkout_url });
@@ -2397,9 +2411,9 @@ app.post('/api/jobs/:id/applications/:appId/accept', requireUser, requireApprove
     const app_ = (await db.query(`SELECT * FROM job_applications WHERE id = $1 AND job_id = $2`, [toInt(req.params.appId) || 0, job.id])).rows[0];
     if (!app_) fail(404, 'Application not found.');
     const ds = v => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10));
-    const note = 'Job: ' + job.title + '\n' + job.description + (app_.quote ? '\n\nYour quote: ₦' + Number(app_.quote).toLocaleString('en-NG') + ' (agree the final price in this chat).' : '');
+    const note = 'Job: ' + job.title + '\n' + job.description + (app_.quote ? '\n\nYour quote: ₦' + Number(app_.quote).toLocaleString('en-NG') + ' has been applied as your rate for this booking.' : '');
     const body = { startDate: ds(job.start_date), endDate: ds(job.end_date), quantity: 8 };
-    const r = await createBookingRequest(db, req.user, app_.professional_id, body, note.slice(0, 2000), null);
+    const r = await createBookingRequest(db, req.user, app_.professional_id, body, note.slice(0, 2000), null, app_.quote ? Number(app_.quote) : null);
     await db.query(`UPDATE job_applications SET status = CASE WHEN id = $1 THEN 'accepted' ELSE 'declined' END WHERE job_id = $2`, [app_.id, job.id]);
     await db.query(`UPDATE job_posts SET status = 'filled', hired_booking_id = $1 WHERE id = $2`, [r.booking.id, job.id]);
     return r;
@@ -2613,6 +2627,17 @@ app.get('/api/admin/listings', adminGuard, wrap(async (req, res) => {
   const { rows } = await pool.query(`SELECT p.id,ca.user_id,p.name,p.role,p.category,p.location,p.rate,p.status,p.is_active,p.showreel,p.created_at,ca.email
     FROM professionals p LEFT JOIN crew_applications ca ON p.application_id = 'app-' || ca.id::text ORDER BY p.created_at DESC LIMIT 500`);
   res.json({ listings: rows });
+}));
+app.post('/api/admin/listings/:id/restore', adminGuard, wrap(async (req, res) => {
+  const id = toInt(req.params.id); if (!id) fail(400, 'Invalid listing id.');
+  await withTx(async db => {
+    const p = (await db.query(`SELECT p.id,ca.user_id,p.name,p.role,p.status FROM professionals p LEFT JOIN crew_applications ca ON p.application_id = 'app-' || ca.id::text WHERE p.id = $1 FOR UPDATE OF p`, [id])).rows[0];
+    if (!p) fail(404, 'Listing not found.');
+    if (p.status !== 'removed') fail(409, 'Only removed listings can be restored.');
+    await db.query("UPDATE professionals SET status = 'approved', active = TRUE, is_active = TRUE WHERE id = $1", [id]);
+    await audit(db, req, 'listing_restored', { id: p.user_id, name: p.name }, { reference: '#' + id, status: 'approved', role: p.role });
+  });
+  res.json({ success: true });
 }));
 app.delete('/api/admin/listings/:id', adminGuard, wrap(async (req, res) => {
   const id = toInt(req.params.id); if (!id) fail(400, 'Invalid listing id.');

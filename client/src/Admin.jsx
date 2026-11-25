@@ -121,6 +121,10 @@ export default function Admin() {
     if (!confirm('Remove ' + name + ' — ' + role + ' from the public marketplace? The account and booking history will remain.')) return;
     try { await api('/api/admin/listings/' + id, { method: 'DELETE' }); say('Listing removed from marketplace.'); await loadListings(); } catch (e) { say(e.message, true); }
   }
+  async function restoreListing(id, name) {
+    if (!confirm('Restore ' + name + ' to the public marketplace? Photos and portfolio items removed with the listing are not recovered.')) return;
+    try { await api('/api/admin/listings/' + id + '/restore', { method: 'POST' }); say('Listing restored.'); await loadListings(); } catch (e) { say(e.message, true); }
+  }
   const loadPayouts = async () => { try { setPayouts(await api('/api/admin/payouts')); } catch (e) { say(e.message, true); } };
   const loadPros = async () => { try { setPros((await api('/api/admin/professionals')).professionals); } catch (e) { say(e.message, true); } };
   const loadAdmins = async () => { try { setAdmins((await api('/api/admin/accounts')).accounts); } catch (e) { say(e.message, true); } };
@@ -331,7 +335,7 @@ export default function Admin() {
                 {tab === 'listings' && (<>
                   <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Marketplace listings</h2><Act onClick={loadListings}>Refresh</Act></div>
                   <p className="my-2 text-xs text-muted">All active crew listings are published automatically after account identity verification. Remove individual listings that do not meet platform standards. This does not delete the account or booking history.</p>
-                  <div className={cn(card, 'mt-3 p-0')}>{listings && <Table headers={['Listing', 'Account email', 'Category', 'Location', 'Rate / day', 'Status', 'Actions']} rows={listings.map(p => [<><strong>#{p.id} · {p.name}</strong><br />{p.role}</>, p.email || '—', p.category || '—', p.location || '—', '₦' + Number(p.rate || 0).toLocaleString(), p.status === 'approved' && p.is_active ? <Pill k="approved">Published</Pill> : <Pill k="rejected">{p.status === 'removed' ? 'Removed' : p.status || 'Inactive'}</Pill>, p.status === 'approved' && p.is_active ? <Act cls="rounded-[9px] bg-[#b42318] px-3 py-2 text-xs font-bold text-white" onClick={() => removeListing(p.id, p.name, p.role)}>Remove listing</Act> : '—'])} />}</div>
+                  <div className={cn(card, 'mt-3 p-0')}>{listings && <Table headers={['Listing', 'Account email', 'Category', 'Location', 'Rate / day', 'Status', 'Actions']} rows={listings.map(p => [<><strong>#{p.id} · {p.name}</strong><br />{p.role}</>, p.email || '—', p.category || '—', p.location || '—', '₦' + Number(p.rate || 0).toLocaleString(), p.status === 'approved' && p.is_active ? <Pill k="approved">Published</Pill> : <Pill k="rejected">{p.status === 'removed' ? 'Removed' : p.status || 'Inactive'}</Pill>, p.status === 'approved' && p.is_active ? <Act cls="rounded-[9px] bg-[#b42318] px-3 py-2 text-xs font-bold text-white" onClick={() => removeListing(p.id, p.name, p.role)}>Remove listing</Act> : p.status === 'removed' ? <Act cls="rounded-[9px] bg-ink px-3 py-2 text-xs font-bold text-white" onClick={() => restoreListing(p.id, p.name)}>Restore listing</Act> : '—'])} />}</div>
                 </>)}
                 {tab === 'payouts' && (<>
                   <div className="flex items-center justify-between gap-3"><h2 className="font-display text-xl font-extrabold">Crew payouts</h2><Act onClick={loadPayouts}>Refresh</Act></div>
