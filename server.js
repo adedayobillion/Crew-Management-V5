@@ -766,7 +766,7 @@ const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&a
 function emailLayout(title, lines, cta) {
   const body = lines.map(l => `<p style="margin:0 0 14px;line-height:1.55">${esc(l)}</p>`).join('');
   const btn = cta ? `<p style="margin:22px 0"><a href="${esc(cta.url)}" style="background:#12372a;color:#fff;text-decoration:none;padding:12px 20px;border-radius:10px;font-weight:700;display:inline-block">${esc(cta.label)}</a></p><p style="font-size:12px;color:#667085;word-break:break-all">If the button does not work, copy this link: ${esc(cta.url)}</p>` : '';
-  return { html: `<div style="font-family:Arial,Helvetica,sans-serif;color:#1d2939;max-width:520px;margin:auto;padding:24px"><h2 style="margin:0 0 16px;font-size:20px">${esc(title)}</h2>${body}${btn}<hr style="border:0;border-top:1px solid #e4e7ec;margin:24px 0 12px"><p style="font-size:12px;color:#98a2b3">Crew Management. You get this because of your account activity. Message alerts can be switched off in your profile settings.</p></div>`,
+  return { html: `<div style="font-family:Arial,Helvetica,sans-serif;color:#1d2939;max-width:520px;margin:auto;padding:24px"><h2 style="margin:0 0 16px;font-size:20px">${esc(title)}</h2>${body}${btn}<hr style="border:0;border-top:1px solid #e4e7ec;margin:24px 0 12px"><p style="font-size:12px;color:#98a2b3">Express Crews. You get this because of your account activity. Message alerts can be switched off in your profile settings.</p></div>`,
     text: title + '\n\n' + lines.join('\n\n') + (cta ? '\n\n' + cta.label + ': ' + cta.url : '') };
 }
 // Fire-and-forget: an email problem must never break the action that triggered it.
@@ -789,7 +789,7 @@ async function emailUsers(userIds, subject, lines, path, key) {
   if (!ids.length) return;
   try {
     const { rows } = await pool.query(`SELECT u.id,u.name,u.email FROM users u LEFT JOIN user_settings us ON us.user_id = u.id WHERE u.id = ANY($1::int[]) AND NOT u.is_suspended AND COALESCE(us.email_notifications, TRUE)`, [ids]);
-    for (const u of rows) await sendEmail(u.email, subject, ['Hi ' + String(u.name).split(' ')[0] + ','].concat(lines), { label: 'Open Crew Management', url: appBase() + (path || '/') }, key ? key + '-' + u.id : undefined);
+    for (const u of rows) await sendEmail(u.email, subject, ['Hi ' + String(u.name).split(' ')[0] + ','].concat(lines), { label: 'Open Express Crews', url: appBase() + (path || '/') }, key ? key + '-' + u.id : undefined);
   } catch (e) { console.warn('emailUsers:', e.message); }
 }
 const appBase = () => APP_URL || 'http://localhost:' + PORT;
@@ -1037,7 +1037,7 @@ app.post('/api/auth/change-password', requireUser, authLimiter, wrap(async (req,
   const hash = await bcrypt.hash(password, 12);
   await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.user.id]);
   await pool.query('DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2', [req.user.id, sha256(parseCookies(req)[SESSION_COOKIE] || '')]);
-  sendEmail(req.user.email, 'Your password was changed', ['Your Crew Management password was just changed. If this was not you, reset your password straight away and contact support.']).catch(() => {});
+  sendEmail(req.user.email, 'Your password was changed', ['Your Express Crews password was just changed. If this was not you, reset your password straight away and contact support.']).catch(() => {});
   res.json({ success: true });
 }));
 app.post('/api/auth/verify-email', authLimiter, wrap(async (req, res) => {
@@ -2145,7 +2145,7 @@ app.post('/api/admin/auth/login', adminLoginLimiter, wrap(async (req, res) => {
   let pending = null, setup = null;
   if (!a.totp_secret) {
     const secret = b32enc(crypto.randomBytes(20)); pending = sealSecret(secret);
-    const uri = 'otpauth://totp/' + encodeURIComponent('Crew Management:' + a.email) + '?secret=' + secret + '&issuer=' + encodeURIComponent('Crew Management');
+    const uri = 'otpauth://totp/' + encodeURIComponent('Express Crews:' + a.email) + '?secret=' + secret + '&issuer=' + encodeURIComponent('Express Crews');
     setup = { secret, otpauth: uri, qr: await require('qrcode').toDataURL(uri, { margin: 1, width: 220 }) };
   }
   const ticket = crypto.randomBytes(24).toString('hex');

@@ -1,4 +1,4 @@
-# Crew Management Agency — React rebuild (v2)
+# Express Crews — React rebuild (v2)
 
 The front end is now **React 19 + Tailwind CSS 4 + Motion**, styled after beUI (https://beui.dev). The Express/PostgreSQL API in `server.js` is unchanged.
 
@@ -9,7 +9,7 @@ The front end is now **React 19 + Tailwind CSS 4 + Motion**, styled after beUI (
 
 ---
 
-# Crew Management Agency — Railway test build
+# Express Crews — Railway test build
 
 This package contains the website plus a Node.js/Express API backed by PostgreSQL. It is suitable for a **test deployment** on Railway. It is not yet a production payment marketplace.
 

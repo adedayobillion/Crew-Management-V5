@@ -35,12 +35,11 @@ export function Nav({ user, onLogin, onLogout, onDashboard, onCrewDashboard, onS
   const go = fn => e => { e.preventDefault(); setOpen(false); fn(); };
   return (
     <>
-      <div className="bg-ink py-2 text-xs text-[#dfe6ed]"><div className="mx-auto flex w-[min(1200px,calc(100%-28px))] justify-between gap-3"><span>CREW MANAGEMENT AGENCY</span><span className="hidden sm:block">Professional production crew. Clear bookings. One trusted platform.</span></div></div>
+      <div className="bg-ink py-2 text-xs text-[#dfe6ed]"><div className="mx-auto flex w-[min(1200px,calc(100%-28px))] justify-between gap-3"><span>EXPRESS CREWS</span><span className="hidden sm:block">Professional production crew. Clear bookings. One trusted platform.</span></div></div>
       <header className="sticky top-1.5 z-30 mx-auto mt-2.5 w-[min(1200px,calc(100%-28px))] sm:top-2.5">
         <div className="relative flex h-[60px] items-center justify-between gap-3 rounded-[17px] border border-white/80 bg-white/75 px-3.5 shadow-[0_10px_40px_#17233714,0_0_0_1px_#17233710] backdrop-blur-xl backdrop-saturate-150 sm:h-[66px] sm:rounded-[20px] sm:px-4">
           <a href="#" onClick={go(onHome)} className="group flex min-w-0 shrink items-center gap-2.5 whitespace-nowrap font-display font-extrabold tracking-[-.03em]">
-            <motion.span whileHover={{ rotate: -10, scale: 1.08 }} transition={{ type: 'spring', stiffness: 400, damping: 14 }} className="grid size-9 place-items-center rounded-xl bg-lime text-lg shadow-[0_6px_16px_#8ebc4655,inset_0_1px_0_#fff9] sm:size-10">C</motion.span>
-            <span className="min-w-0 truncate text-[11px] leading-tight max-[389px]:hidden sm:text-sm">CREW MANAGEMENT<small className="block text-[8px] font-extrabold tracking-[.16em] text-muted max-[430px]:hidden sm:text-[9px]">AGENCY</small></span>
+            <img src="/logo-icon.svg" alt="" className="h-9 w-9 min-[430px]:hidden" /><img src="/logo-horizontal.svg" alt="Express Crews" className="hidden h-8 w-auto min-[430px]:block sm:h-9" />
           </a>
           <nav className="hidden items-center gap-5 whitespace-nowrap text-[13px] font-bold lg:flex xl:gap-7">
             {links.map(([h, l]) => (
@@ -417,7 +416,7 @@ export function Footer({ openLegal, onTools, onJobs }) {
     <footer className="bg-ink py-9 text-white" style={{ background: 'radial-gradient(600px 240px at 80% 0,#c9f36a14,transparent 70%),#172337' }}>
       <div className="mx-auto w-[min(1200px,calc(100%-28px))]">
         <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
-          <a href="#" className="flex items-center gap-2.5 whitespace-nowrap font-display text-sm font-extrabold tracking-[-.03em]"><span className="grid size-9 place-items-center rounded-xl bg-lime text-lg text-ink">C</span><span>CREW MANAGEMENT<small className="block text-[9px] tracking-[.16em] text-[#aebbc8]">AGENCY</small></span></a>
+          <a href="#" aria-label="Express Crews"><img src="/logo-horizontal-reversed.svg" alt="Express Crews" className="h-9 w-auto" /></a>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-[#d2dbe3]">
             {[['#discover', 'Find crew'], ['#how', 'How it works'], ['#trust', 'Safe bookings'], ['#join', 'Join as crew']].map(([h, l]) => <a key={h} href={h} className={lk}>{l}</a>)}
             <button type="button" onClick={onJobs} className={lk}>Job board</button>
@@ -426,7 +425,7 @@ export function Footer({ openLegal, onTools, onJobs }) {
           </div>
         </div>
         <p className="mt-4 text-[11px] text-[#aebbc8]">Pay and communicate only inside the app. Never send money or deal outside the platform.</p>
-        <div className="mt-6 flex flex-col justify-between gap-2 border-t border-white/15 pt-4 text-[10px] text-[#aab6c2] sm:flex-row"><span>© {new Date().getFullYear()} Crew Management Agency</span><span>Built for production professionals</span></div>
+        <div className="mt-6 flex flex-col justify-between gap-2 border-t border-white/15 pt-4 text-[10px] text-[#aab6c2] sm:flex-row"><span>© {new Date().getFullYear()} Express Crews</span><span>Built for production professionals</span></div>
       </div>
     </footer>
   );
