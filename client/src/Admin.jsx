@@ -232,7 +232,7 @@ export default function Admin() {
   return (
     <div className="mx-auto max-w-[1400px] p-4 sm:p-6">
       <header className="sticky top-2.5 z-20 mb-6 flex items-center justify-between gap-4 rounded-[18px] border border-white/80 bg-white/75 px-4 py-3 shadow-[0_10px_36px_#14203314] backdrop-blur-xl">
-        <div className="font-display text-xl font-extrabold tracking-[-.04em]">CMA <small className="block text-[11px] tracking-[.08em] text-muted">ADMIN CONTROL CENTRE</small></div>
+        <div className="font-display text-xl font-extrabold tracking-[-.04em]">EXPRESS CREWS <small className="block text-[11px] tracking-[.08em] text-muted">ADMIN CONTROL CENTRE</small></div>
         <div className="flex items-center gap-3 text-sm"><a href="/" className="hover:underline">View marketplace <ArrowUpRight className="size-4" aria-hidden="true" /></a>{authed && <span className="text-xs text-muted">Signed in as <strong>{adminName || 'admin'}</strong></span>}{authed && <Button size="sm" variant="dark" onClick={lock}>{token ? 'Lock console' : 'Sign out'}</Button>}</div>
       </header>
 
