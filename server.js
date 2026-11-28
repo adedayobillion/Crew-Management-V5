@@ -268,6 +268,14 @@ async function initDb() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
       CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash);
+      CREATE TABLE IF NOT EXISTS device_tokens (
+        id SERIAL PRIMARY KEY,
+        user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token TEXT UNIQUE NOT NULL,
+        platform VARCHAR(10) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id);
       CREATE TABLE IF NOT EXISTS crew_applications (
         id SERIAL PRIMARY KEY,
         user_id INT REFERENCES users(id) ON DELETE SET NULL,
@@ -1908,7 +1916,42 @@ function relay(evt) {
   pool.query('SELECT pg_notify($1, $2)', ['cma_events', payload]).catch(() => {});
 }
 function broadcastChat(bookingId, row) { relay({ t: 'chat', b: bookingId, row }); }
-function emitMessageNotification(userId, payload) { if (userId) relay({ t: 'note', u: Number(userId), p: payload }); }
+// Push notifications (Android via Firebase Cloud Messaging). Set FCM_SERVICE_ACCOUNT to the service-account JSON; without it push is off.
+let FCM_SA = null; try { FCM_SA = process.env.FCM_SERVICE_ACCOUNT ? JSON.parse(process.env.FCM_SERVICE_ACCOUNT) : null; } catch (e) { console.warn('FCM_SERVICE_ACCOUNT is not valid JSON; push disabled.'); }
+let fcmAuth = { token: '', exp: 0 };
+async function fcmAccessToken() {
+  if (fcmAuth.token && fcmAuth.exp > Date.now() + 60000) return fcmAuth.token;
+  const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url'), now = Math.floor(Date.now() / 1000);
+  const head = b64({ alg: 'RS256', typ: 'JWT' }) + '.' + b64({ iss: FCM_SA.client_email, scope: 'https://www.googleapis.com/auth/firebase.messaging', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600 });
+  const sig = require('crypto').createSign('RSA-SHA256').update(head).sign(FCM_SA.private_key).toString('base64url');
+  const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: head + '.' + sig }) });
+  const j = await r.json(); if (!j.access_token) throw new Error('FCM auth failed');
+  fcmAuth = { token: j.access_token, exp: Date.now() + (j.expires_in || 3600) * 1000 }; return fcmAuth.token;
+}
+async function pushUsers(userIds, title, body, path) {
+  if (!FCM_SA) return;
+  const ids = [...new Set((userIds || []).map(Number).filter(Boolean))]; if (!ids.length) return;
+  try {
+    const { rows } = await pool.query(`SELECT d.token FROM device_tokens d JOIN users u ON u.id = d.user_id WHERE d.user_id = ANY($1::int[]) AND d.platform = 'android' AND NOT u.is_suspended`, [ids]);
+    if (!rows.length) return;
+    const at = await fcmAccessToken();
+    for (const { token } of rows) {
+      const r = await fetch('https://fcm.googleapis.com/v1/projects/' + FCM_SA.project_id + '/messages:send', { method: 'POST', headers: { Authorization: 'Bearer ' + at, 'Content-Type': 'application/json' }, body: JSON.stringify({ message: { token, notification: { title: String(title || 'Express Crews').slice(0, 80), body: String(body || '').slice(0, 160) }, data: { path: String(path || '/') } } }) });
+      if (r.status === 404 || r.status === 400) { const j = await r.json().catch(() => ({})); if (/UNREGISTERED|INVALID_ARGUMENT/.test(JSON.stringify(j))) await pool.query('DELETE FROM device_tokens WHERE token = $1', [token]); }
+    }
+  } catch (e) { console.warn('pushUsers:', e.message); }
+}
+app.post('/api/push/register', requireUser, wrap(async (req, res) => {
+  const token = str(req.body && req.body.token, 4096), platform = req.body && req.body.platform === 'ios' ? 'ios' : 'android';
+  if (!token || token.length < 20) fail(400, 'Invalid device token.');
+  await pool.query(`INSERT INTO device_tokens (user_id, token, platform) VALUES ($1,$2,$3) ON CONFLICT (token) DO UPDATE SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform`, [req.user.id, token, platform]);
+  res.json({ success: true });
+}));
+app.post('/api/push/unregister', requireUser, wrap(async (req, res) => {
+  await pool.query('DELETE FROM device_tokens WHERE token = $1 AND user_id = $2', [str(req.body && req.body.token, 4096), req.user.id]);
+  res.json({ success: true });
+}));
+function emitMessageNotification(userId, payload) { if (userId) { relay({ t: 'note', u: Number(userId), p: payload }); pushUsers([userId], payload && payload.sender_name, payload && payload.preview, payload && payload.booking_id ? '/?inbox=' + payload.booking_id : '/').catch(() => {}); } }
 let listenerClient = null;
 async function startEventListener() {
   try {
