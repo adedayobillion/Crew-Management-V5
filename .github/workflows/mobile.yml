@@ -31,3 +31,33 @@ jobs:
       - run: npx cap sync ios
       - name: Build for simulator (unsigned, proves the project compiles)
         run: xcodebuild -workspace ios/App/App.xcworkspace -scheme App -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build
+  android-release:
+    # Manual: Actions > Mobile builds > Run workflow. Needs the secrets listed in mobile/README.md.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: mobile } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: mobile/package-lock.json }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - run: npm ci
+      - name: Keystore and Firebase config
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          GS: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          test -n "$KS" || { echo "ANDROID_KEYSTORE_BASE64 secret is missing"; exit 1; }
+          echo "$KS" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          if [ -n "$GS" ]; then echo "$GS" > android/app/google-services.json; fi
+      - run: npx cap sync android
+      - name: Build signed AAB
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/upload.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: chmod +x android/gradlew && cd android && ./gradlew bundleRelease
+      - uses: actions/upload-artifact@v4
+        with: { name: express-crews-release-aab, path: mobile/android/app/build/outputs/bundle/release/app-release.aab }

@@ -179,13 +179,14 @@ test('admin: named account with 2FA, recovery codes, payout rules, audit', async
   assert.equal((await a.post('/api/admin/auth/login', { email: 'ada@test.dev', password: 'nope' })).status, 401);
   const l = await a.post('/api/admin/auth/login', { email: 'ada@test.dev', password: 'adminpassword123' }); assert.equal(l.body.step, 'enroll');
   assert.equal((await a.post('/api/admin/auth/verify', { ticket: l.body.ticket, code: '000000' })).status, 401);
-  const v = await a.post('/api/admin/auth/verify', { ticket: l.body.ticket, code: totp(l.body.setup.secret) });
+  const code1 = totp(l.body.setup.secret);
+  const v = await a.post('/api/admin/auth/verify', { ticket: l.body.ticket, code: code1 });
   assert.equal(v.status, 200); assert.equal(v.body.recovery_codes.length, 8);
   assert.equal((await a.post('/api/admin/accounts', { name: 'Bo', email: 'bo@test.dev', password: 'adminpassword123' })).status, 403, 'cookie sessions need the CSRF header');
   const l2 = await agent().post('/api/admin/auth/login', { email: 'ada@test.dev', password: 'adminpassword123' });
   assert.equal(l2.body.step, 'code');
   const b = agent(); const l3 = await b.post('/api/admin/auth/login', { email: 'ada@test.dev', password: 'adminpassword123' });
-  assert.equal((await b.post('/api/admin/auth/verify', { ticket: l3.body.ticket, code: totp(l.body.setup.secret) })).status, 401, 'a used code cannot be replayed');
+  assert.equal((await b.post('/api/admin/auth/verify', { ticket: l3.body.ticket, code: code1 })).status, 401, 'a used code cannot be replayed');
   const c = agent(); const l4 = await c.post('/api/admin/auth/login', { email: 'ada@test.dev', password: 'adminpassword123' });
   assert.equal((await c.post('/api/admin/auth/verify', { ticket: l4.body.ticket, code: v.body.recovery_codes[0] })).status, 200, 'recovery code works');
   const l5 = await agent().post('/api/admin/auth/login', { email: 'ada@test.dev', password: 'adminpassword123' });

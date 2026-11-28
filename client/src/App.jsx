@@ -68,6 +68,14 @@ function Shell() {
     http('/api/profile').then(r => {
       if (active && r.ok) setMessagePopupsEnabled(r.data.settings?.message_popups !== false);
     }).catch(() => {});
+    // Native app (Android/iOS shell): ask for notification permission and register this device for push.
+    const PN = window.Capacitor?.Plugins?.PushNotifications;
+    if (PN && window.Capacitor?.isNativePlatform?.()) {
+      const platform = window.Capacitor.getPlatform?.() === 'ios' ? 'ios' : 'android';
+      PN.requestPermissions().then(p => { if (p.receive === 'granted') PN.register(); }).catch(() => {});
+      PN.addListener('registration', t => { postJSON('/api/push/register', { token: t.value, platform }).catch(() => {}); });
+      PN.addListener('pushNotificationActionPerformed', n => { const p = n?.notification?.data?.path; if (p && p.startsWith('/')) window.location.href = p; });
+    }
     refreshUnread();
     const stream = new EventSource('/api/messages/stream');
     stream.onmessage = event => {
@@ -77,7 +85,7 @@ function Shell() {
       if (popupsRef.current && !inboxOpenRef.current) setIncomingMessage(message);
       refreshUnread();
     };
-    return () => { active = false; stream.close(); };
+    return () => { active = false; stream.close(); window.Capacitor?.Plugins?.PushNotifications?.removeAllListeners?.(); };
   }, [user?.id, refreshUnread]); // popups/inbox state is read through refs so opening the inbox does not tear down and reopen the stream
 
   // Links from emails: ?reset=<token>, ?verify=<token>, ?inbox=<booking id>
