@@ -1,0 +1,16 @@
+{
+  "appId": "com.expresscrews.app",
+  "appName": "Express Crews",
+  "webDir": "www",
+  "server": {
+    "url": "https://www.expresscrews.com",
+    "androidScheme": "https",
+    "allowNavigation": ["www.expresscrews.com", "expresscrews.com"]
+  },
+  "ios": { "contentInset": "always", "backgroundColor": "#1b1b1b" },
+  "android": { "backgroundColor": "#1b1b1b" },
+  "plugins": {
+    "SplashScreen": { "launchShowDuration": 800, "backgroundColor": "#1b1b1b", "showSpinner": false },
+    "StatusBar": { "style": "DARK", "backgroundColor": "#172337" }
+  }
+}
